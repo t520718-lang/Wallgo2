@@ -160,7 +160,8 @@ footer { font-size: 12px; color: var(--muted); }
       <li>圓形：走 1 格，或走 1 格後左轉或右轉再走 1 格。</li>
       <li>不能穿過或停在其他棋子上，也不能穿牆。</li>
       <li>移動後，必須在棋子所在格的四邊之一蓋一道牆。</li>
-      <li>破牆：每人一次，只能拆正好擋在移動路徑上的牆，拆完照常移動並蓋牆。</li>
+      <li>破牆：每人一次，只能拆正好擋在移動路徑上的牆。選棋子後出現的橘點就是要破牆才到得了的格子。</li>
+      <li>破牆那一手之後要不要蓋牆，節目原文沒有查到，開局時可以選「照常蓋牆」或「不蓋牆」。</li>
       <li>所有人的棋子都被隔開時立即結束，沒用掉的破牆不保留。</li>
       <li>領地最大者存活，另外兩人進入一對一：排名較高的人改拿紅棋，另一人改拿藍棋。</li>
     </ul>
@@ -184,8 +185,8 @@ footer { font-size: 12px; color: var(--muted); }
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="config.js?v=2"></script>
-<script src="net-firebase.js"></script>
-<script src="engine.js"></script>
-<script src="app.js"></script>
+<script src="net-firebase.js?v=3"></script>
+<script src="engine.js?v=3"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>

@@ -166,6 +166,9 @@
     return out;
   }
 
+  // House option: a move that breaks a wall may be set to end without building one.
+  function needsWall(s, mv) { return !(mv.brk && s.opts && s.opts.brkNoWall); }
+
   function current(s) { return s.phase === "place" ? (s.queue[0] ? s.queue[0].p : null) : s.phase === "play" ? s.order[s.turn] : null; }
 
   // After any change: end the game, or pass the turn to the next player who can move.
@@ -188,13 +191,14 @@
     var p = s0.order[s0.turn];
     var legal = legalMoves(s0, p).filter(function (m) { return sameMove(m, mv); })[0];
     if (!legal) throw new Error("illegal move");
-    if (wallSides(s0, legal).indexOf(wallDir) < 0) throw new Error("illegal wall");
+    var build = needsWall(s0, legal);
+    if (build && wallSides(s0, legal).indexOf(wallDir) < 0) throw new Error("illegal wall");
     var s = clone(s0), pc = s.pieces[legal.pi];
     var from = [pc.r, pc.c];
     if (legal.brk) { delete s.walls[legal.brk]; s.brk[p] = false; }
     pc.r = legal.to[0]; pc.c = legal.to[1];
-    var wk = edgeKey(pc.r, pc.c, wallDir);
-    s.walls[wk] = p;
+    var wk = build ? edgeKey(pc.r, pc.c, wallDir) : null;
+    if (wk) s.walls[wk] = p;
     s.moveNo++;
     s.last = { kind: "move", p: p, pi: legal.pi, from: from, to: legal.to.slice(), wall: wk, broke: legal.brk };
     settle(s, false);
@@ -206,7 +210,7 @@
     var ms = legalMoves(s, s.order[s.turn]);
     var mv = ms[Math.floor(rnd() * ms.length)];
     var ws = wallSides(s, mv);
-    return { mv: mv, wall: ws[Math.floor(rnd() * ws.length)] };
+    return { mv: mv, wall: needsWall(s, mv) ? ws[Math.floor(rnd() * ws.length)] : null };
   }
 
   /* ---- Match: three-player round, then the one-on-one decider ---- */
@@ -256,7 +260,7 @@
   var WG = {
     N: N, DIRS: DIRS, edgeKey: edgeKey, pieceAt: pieceAt, newGame: newGame, placeTypes: placeTypes, place: place,
     regions: regions, separated: separated, scores: scores, ranking: ranking, movesForPiece: movesForPiece,
-    legalMoves: legalMoves, wallSides: wallSides, current: current, applyTurn: applyTurn, randomTurn: randomTurn,
+    legalMoves: legalMoves, wallSides: wallSides, needsWall: needsWall, current: current, applyTurn: applyTurn, randomTurn: randomTurn,
     newMatch: newMatch, verdict: verdict, nextStage: nextStage, clone: clone
   };
   root.WG = WG;

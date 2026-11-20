@@ -12,7 +12,7 @@
 
   var S = {
     view: "home", kind: null, match: null, ui: {}, stamp: "",
-    setup: { n: 3, timer: 90 },
+    setup: { n: 3, timer: 90, brkNoWall: false },
     net: "loading", db: null, user: null, myId: null, canWrite: null,
     code: null, ref: null, room: null, unsub: null, busy: false, missing: false, slow: false, loadT: null,
     names: {}, asked: {}, dests: [], saved: null, nick: ""
@@ -97,10 +97,11 @@
   }
 
   /* ---------- starting and leaving ---------- */
+  function setupOpts() { return { timer: S.setup.timer, brkNoWall: S.setup.n === 3 && !!S.setup.brkNoWall }; }
   function startLocal(resume) {
     S.kind = "local"; S.view = "game"; S.ui = {};
     if (resume && S.saved) { S.match = S.saved; S.match.turnAt = Date.now(); }
-    else { S.match = WG.newMatch(S.setup.n, { timer: S.setup.timer }); S.match.turnAt = Date.now(); saveLocal(S.match); }
+    else { S.match = WG.newMatch(S.setup.n, setupOpts()); S.match.turnAt = Date.now(); saveLocal(S.match); }
     render();
   }
   function leave() {
@@ -129,7 +130,7 @@
     ref.get().then(function (snap) {
       if (snap.exists) { if ((tries || 0) > 5) throw { soft: "暫時產生不了房號，請再試一次。" }; S.busy = false; return createRoom((tries || 0) + 1); }
       var seats = []; for (var i = 0; i < S.setup.n; i++) seats.push(i === 0 ? S.myId : "");
-      return ref.set({ code: code, n: S.setup.n, opts: { timer: S.setup.timer }, seats: seats, match: null, v: 1, at: Date.now() })
+      return ref.set({ code: code, n: S.setup.n, opts: setupOpts(), seats: seats, match: null, v: 1, at: Date.now() })
         .then(function () { S.busy = false; enterRoom(code); });
     }).then(null, function (e) { S.busy = false; toast(e && e.soft ? e.soft : errMsg(e)); render(); });
   }
@@ -243,7 +244,7 @@
       var l = keyLine(m.brk); out.push(lineSvg(l, "brk")); hits.push(hitSvg(l, 'data-a="brk" data-i="' + ix + '"'));
     });
     // where the new wall can go
-    if (pend) WG.wallSides(g, pend).forEach(function (d) {
+    if (pend && WG.needsWall(g, pend)) WG.wallSides(g, pend).forEach(function (d) {
       var l = sideLine(pend.to[0], pend.to[1], d);
       out.push(lineSvg(l, "cand")); hits.push(hitSvg(l, 'data-a="wall" data-d="' + d + '" aria-label="在這一邊蓋牆"'));
     });
@@ -259,7 +260,8 @@
   function homeHtml() {
     var h = '<section class="panel"><h2>對局設定</h2>' +
       '<div class="row"><span class="note">人數</span>' + seg("segN", [[3, "三人局接一對一"], [2, "只下一對一"]], S.setup.n) + "</div>" +
-      '<div class="row"><span class="note">每步限時</span>' + seg("segT", [[90, "90 秒"], [0, "不限時"]], S.setup.timer) + "</div></section>";
+      '<div class="row"><span class="note">每步限時</span>' + seg("segT", [[90, "90 秒"], [0, "不限時"]], S.setup.timer) + "</div>" +
+      (S.setup.n === 3 ? '<div class="row"><span class="note">破牆那一手</span>' + seg("segB", [[0, "照常蓋牆"], [1, "不蓋牆"]], S.setup.brkNoWall ? 1 : 0) + "</div>" : "") + "</section>";
     h += '<section class="panel"><h2>同機輪流</h2><p>大家共用這台裝置，輪到誰就把裝置交給誰。</p><div class="row">' +
       '<button class="primary" type="button" id="goLocal">開始新對局</button>' +
       (S.saved && S.saved.game ? '<button type="button" id="goResume">接著下上一局</button>' : "") + "</div></section>";
@@ -283,7 +285,7 @@
     h += '<section class="panel"><p>房號</p><div class="code">' + esc(room.code) + "</div>" +
       (window.WG_STANDALONE ? '<div class="row"><button class="small" type="button" id="goCopy">複製邀請連結</button></div>' : "") +
       "<p>把房號" + (window.WG_STANDALONE ? "或邀請連結" : "") + "告訴對手，請他們打開這一頁，輸入房號後入座。" +
-      (room.n === 3 ? "三人局接一對一" : "只下一對一") + "，" + (room.opts && room.opts.timer ? "每步 " + room.opts.timer + " 秒。" : "不限時。") + "</p></section>";
+      (room.n === 3 ? "三人局接一對一" : "只下一對一") + "，" + (room.opts && room.opts.timer ? "每步 " + room.opts.timer + " 秒" : "不限時") + (room.n === 3 ? "，破牆那一手" + (room.opts && room.opts.brkNoWall ? "不蓋牆" : "照常蓋牆") : "") + "。</p></section>";
     h += '<section class="panel"><h2>座位</h2>' +
       (S.user && S.user.setName && !seated() ? '<div class="row"><label class="fld" for="nickIn">暱稱（對手看得到）<input type="text" class="plain" id="nickIn" maxlength="12" autocomplete="off" value="' + esc(S.nick) + '"></label></div>' : "") +
       '<div class="seats">';
@@ -307,7 +309,7 @@
       return label(cur) + "：點一個空格，擺放" + (ts.length === 1 ? TYPE[ts[0]] : "") + "棋子";
     }
     if (!act) return "等待 " + label(cur) + " 下棋";
-    if (ui.pend) return label(cur) + "：點虛線，選一邊蓋牆";
+    if (ui.pend) return label(cur) + (WG.needsWall(g, ui.pend) ? "：點虛線，選一邊蓋牆" : "：這一手破牆後不蓋牆，按「確認破牆」");
     if (ui.brkOpts) return label(cur) + "：點要拆掉的牆";
     if (ui.sel !== undefined && ui.sel !== null) return label(cur) + "：選目的地" + (g.round === 1 && g.brk[cur] ? "（橘點要用掉破牆）" : "");
     return label(cur) + "：選一枚棋子";
@@ -354,9 +356,10 @@
       h += '<div class="controls">';
       if (g.phase === "place" && act && WG.placeTypes(g).length > 1)
         h += '<span class="note">要擺的棋子</span>' + seg("segP", [["s", "方形"], ["r", "圓形"]], S.ui.ptype || "s");
+      if (g.phase === "play" && act && S.ui.pend && !WG.needsWall(g, S.ui.pend)) h += '<button class="primary" type="button" id="goConfirm">確認破牆</button>';
       if (g.phase === "play" && act && (S.ui.pend || S.ui.brkOpts)) h += '<button type="button" id="goCancel">重選這一步</button>';
       h += '<span class="grow"></span><button class="small hidden" type="button" id="goForce">對方逾時，代下隨機一手</button></div>';
-      h += '<p class="note">' + (g.round === 1 ? "三人局" : "一對一") + (g.round === 2 && m.safe !== null && m.safe !== undefined ? "（" + esc(seatLabel(m.safe)) + " 已存活）" : "") + "　方形直走 1 或 2 格；圓形走 1 格，或走 1 格後轉彎再 1 格。</p>";
+      h += '<p class="note">' + (g.round === 1 ? "三人局" + (g.opts && g.opts.brkNoWall ? "（破牆那一手不蓋牆）" : "") : "一對一") + (g.round === 2 && m.safe !== null && m.safe !== undefined ? "（" + esc(seatLabel(m.safe)) + " 已存活）" : "") + "　方形直走 1 或 2 格；圓形走 1 格，或走 1 格後轉彎再 1 格。</p>";
     } else h += resultHtml(m);
     return h + "</div></div>";
   }
@@ -396,7 +399,7 @@
       for (var r = 0; r < N; r++) for (var c = 0; c < N; c++) if (WG.pieceAt(g, r, c) < 0) free.push([r, c]);
       var f = free[Math.floor(Math.random() * free.length)]; doPlace(f[0], f[1]);
     } else if (g.phase === "play") {
-      if (S.ui.pend) { var ws = WG.wallSides(g, S.ui.pend); doTurn(S.ui.pend, ws[Math.floor(Math.random() * ws.length)]); }
+      if (S.ui.pend) { var ws = WG.wallSides(g, S.ui.pend); doTurn(S.ui.pend, WG.needsWall(g, S.ui.pend) ? ws[Math.floor(Math.random() * ws.length)] : null); }
       else { var t = WG.randomTurn(g); doTurn(t.mv, t.wall); }
     }
   }
@@ -429,7 +432,7 @@
     if ((el = t.closest(".seg"))) {
       var b = t.closest("button"); if (!b) return;
       var v = b.getAttribute("data-v");
-      if (el.id === "segN") S.setup.n = +v; else if (el.id === "segT") S.setup.timer = +v; else if (el.id === "segP") S.ui.ptype = v;
+      if (el.id === "segN") S.setup.n = +v; else if (el.id === "segT") S.setup.timer = +v; else if (el.id === "segB") S.setup.brkNoWall = v === "1"; else if (el.id === "segP") S.ui.ptype = v;
       render(); return;
     }
     if ((el = t.closest("button"))) {
@@ -448,6 +451,7 @@
         try { navigator.clipboard.writeText(url).then(function () { toast("已複製邀請連結。"); }, function () { toast("複製失敗，請直接告訴對方房號 " + S.code + "。"); }); }
         catch (err) { toast("複製失敗，請直接告訴對方房號 " + S.code + "。"); }
       }
+      else if (id === "goConfirm") { try { doTurn(S.ui.pend, null); } catch (err) { S.ui = {}; render(); } }
       else if (id === "goCancel") { S.ui = { ptype: S.ui.ptype }; render(); }
       else if (id === "goForce") forceTurn();
       else if (id === "goNext") commit(WG.nextStage(S.match));
