@@ -1,0 +1,25 @@
+{
+  "rules": {
+    "rooms": {
+      "$code": {
+        ".read": true,
+        ".write": true,
+        ".validate": "$code.matches(/^[A-Z0-9]{4}$/) && newData.hasChildren(['v', 'json', 'at']) && newData.child('v').isNumber() && newData.child('json').isString() && newData.child('json').val().length < 20000"
+      }
+    },
+    "locks": {
+      "$code": {
+        ".read": true,
+        ".write": true,
+        ".validate": "$code.matches(/^[A-Z0-9]{4}$/) && newData.hasChildren(['holder', 'exp']) && newData.child('holder').isString() && newData.child('holder').val().length < 40 && newData.child('exp').isNumber()"
+      }
+    },
+    "names": {
+      "$id": {
+        ".read": true,
+        ".write": true,
+        ".validate": "$id.matches(/^[a-z0-9]{6,20}$/) && newData.isString() && newData.val().length <= 12"
+      }
+    }
+  }
+}
