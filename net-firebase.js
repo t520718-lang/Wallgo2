@@ -25,6 +25,13 @@
     return { id: id, exists: !!data, data: function () { return data || undefined; }, metadata: { fromCache: false, hasPendingWrites: false } };
   }
   var db = {
+    // Presence comes from the connection itself: the server clears our mark when this page closes or drops off the network.
+    presence: function (code, id, tab, cb) {
+      var all = rdb.ref("presence/" + code), me = all.child(id).child(tab), conn = rdb.ref(".info/connected");
+      var onConn = conn.on("value", function (s) { if (s.val()) me.onDisconnect().remove().then(function () { return me.set(true); }).then(null, function () {}); });
+      var onAll = all.on("value", function (s) { var v = s.val() || {}, map = {}; Object.keys(v).forEach(function (k) { map[k] = true; }); cb(map); }, function () {});
+      return function () { conn.off("value", onConn); all.off("value", onAll); me.remove().then(null, function () {}); };
+    },
     doc: function (path) {
       var seg = path.split("/"), code = seg[1], id = seg[seg.length - 1];
       var ref = rdb.ref("rooms/" + code), lock = rdb.ref("locks/" + code);

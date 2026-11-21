@@ -14,6 +14,17 @@
         ".validate": "$code.matches(/^[A-Z0-9]{4}$/) && newData.hasChildren(['holder', 'exp']) && newData.child('holder').isString() && newData.child('holder').val().length < 40 && newData.child('exp').isNumber()"
       }
     },
+    "presence": {
+      "$code": {
+        ".read": true,
+        "$id": {
+          "$tab": {
+            ".write": true,
+            ".validate": "$code.matches(/^[A-Z0-9]{4}$/) && $id.matches(/^[a-z0-9]{6,20}$/) && $tab.matches(/^[a-z0-9]{1,12}$/) && newData.isBoolean()"
+          }
+        }
+      }
+    },
     "names": {
       "$id": {
         ".read": true,

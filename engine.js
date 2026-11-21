@@ -56,7 +56,7 @@
     if (!inside(r, c) || pieceAt(s, r, c) >= 0) throw new Error("bad cell");
     s.pieces.push({ p: q.p, t: t, r: r, c: c });
     s.queue.shift();
-    s.last = { kind: "place", p: q.p, to: [r, c] };
+    s.last = { kind: "place", p: q.p, pi: s.pieces.length - 1, to: [r, c] };
     if (!s.queue.length) { s.phase = "play"; s.turn = 0; settle(s, true); }
     return s;
   }
@@ -200,7 +200,7 @@
     var wk = build ? edgeKey(pc.r, pc.c, wallDir) : null;
     if (wk) s.walls[wk] = p;
     s.moveNo++;
-    s.last = { kind: "move", p: p, pi: legal.pi, from: from, to: legal.to.slice(), wall: wk, broke: legal.brk };
+    s.last = { kind: "move", p: p, pi: legal.pi, from: from, to: legal.to.slice(), path: legal.path, wall: wk, broke: legal.brk };
     settle(s, false);
     return s;
   }

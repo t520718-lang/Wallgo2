@@ -11,7 +11,7 @@
 :root {
   --bg: #e9edf1; --surface: #ffffff; --ink: #17202b; --muted: #5b6978; --line: #cdd5dd;
   --board: #d3dbe4; --cell: #f7f9fb; --wall: #17202b; --accent: #0d7a70; --accent-ink: #ffffff;
-  --p0: #d4433b; --p1: #2c6bd9; --p2: #d99a00; --warn: #b4530a;
+  --p0: #d4433b; --p1: #2c6bd9; --p2: #d99a00; --warn: #b4530a; --danger: #d42a1c;
   --f-display: "Chakra Petch", "Noto Sans TC", system-ui, sans-serif;
   --f-body: "Noto Sans TC", system-ui, -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
 }
@@ -19,13 +19,13 @@
   :root:not([data-theme="light"]) {
     --bg: #0f141a; --surface: #18202a; --ink: #e8edf2; --muted: #93a2b1; --line: #2b3643;
     --board: #1e2833; --cell: #2a3644; --wall: #f1f5f9; --accent: #35c9b8; --accent-ink: #06211e;
-    --p0: #f0645b; --p1: #5b93f5; --p2: #f0b929; --warn: #f0a04b; color-scheme: dark;
+    --p0: #f0645b; --p1: #5b93f5; --p2: #f0b929; --warn: #f0a04b; --danger: #ff5a4d; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0f141a; --surface: #18202a; --ink: #e8edf2; --muted: #93a2b1; --line: #2b3643;
   --board: #1e2833; --cell: #2a3644; --wall: #f1f5f9; --accent: #35c9b8; --accent-ink: #06211e;
-  --p0: #f0645b; --p1: #5b93f5; --p2: #f0b929; --warn: #f0a04b; color-scheme: dark;
+  --p0: #f0645b; --p1: #5b93f5; --p2: #f0b929; --warn: #f0a04b; --danger: #ff5a4d; color-scheme: dark;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
@@ -86,8 +86,17 @@ input[type="text"].plain { font-family: var(--f-body); letter-spacing: 0; text-t
 .status { display: flex; gap: 8px; align-items: center; min-height: 44px; }
 .status .msg { flex: 1; font-weight: 500; }
 .status .dot { width: 14px; height: 14px; border-radius: 3px; background: var(--pc, var(--muted)); flex: none; }
-.timer { font-family: var(--f-display); font-variant-numeric: tabular-nums; font-size: 18px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line); }
-.timer.low { color: var(--warn); border-color: var(--warn); }
+.timer { font-family: var(--f-display); font-variant-numeric: tabular-nums; font-size: 20px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line); }
+.timer.warn { color: var(--warn); border-color: var(--warn); }
+.timer.crit { color: #fff; background: var(--danger); border-color: var(--danger); font-size: 22px; font-weight: 700; }
+.tframe { fill: none; stroke: var(--accent); stroke-width: 6; transition: stroke-dasharray .5s linear, stroke .3s; }
+.tframe.warn { stroke: var(--warn); }
+.tframe.crit { stroke: var(--danger); stroke-width: 8; }
+svg.board.t-crit .frame { stroke: color-mix(in srgb, var(--danger) 60%, var(--wall)); }
+@media (prefers-reduced-motion: no-preference) {
+  .tframe.crit.mine, .timer.crit.mine, svg.board.t-crit.t-mine .frame { animation: wg-blink .7s ease-in-out infinite; }
+  @keyframes wg-blink { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+}
 
 /* board */
 .boardbox { background: var(--board); border-radius: 14px; padding: 6px; touch-action: manipulation; width: min(100cqw, 100cqh); height: min(100cqw, 100cqh); }
@@ -108,6 +117,17 @@ svg.board { display: block; width: 100%; height: 100%; user-select: none; -webki
 .pc.p0 { fill: var(--p0); } .pc.p1 { fill: var(--p1); } .pc.p2 { fill: var(--p2); }
 .pc.locked { opacity: .5; }
 .pc.ghost { opacity: .25; }
+/* previews: nothing here is committed yet, so everything is drawn light, in the player's own colour */
+.pc.pre { fill-opacity: .28; stroke-width: 2; stroke-dasharray: 3 3.5; stroke-linecap: round; }
+.pc.pre.p0 { stroke: var(--p0); } .pc.pre.p1 { stroke: var(--p1); } .pc.pre.p2 { stroke: var(--p2); }
+.trail { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: .1 8; opacity: .55; }
+.wallcand { fill: var(--accent); opacity: .32; }
+.wallcand.dim { opacity: .16; }
+.wallpre { fill: color-mix(in srgb, var(--wall) 30%, transparent); stroke: var(--wall); stroke-width: 1.6; }
+@media (prefers-reduced-motion: no-preference) {
+  .wallpre { animation: wg-breathe 1.3s ease-in-out infinite; }
+  @keyframes wg-breathe { 0%, 100% { fill: color-mix(in srgb, var(--wall) 22%, transparent); } 50% { fill: color-mix(in srgb, var(--wall) 55%, transparent); } }
+}
 .ring { fill: none; stroke: var(--ink); stroke-width: 3; }
 .ring.can { stroke: var(--accent); stroke-dasharray: 5 5; }
 .dest { fill: var(--accent); opacity: .85; }
@@ -117,6 +137,22 @@ svg.board { display: block; width: 100%; height: 100%; user-select: none; -webki
   .ring.can { animation: spin 6s linear infinite; transform-box: fill-box; transform-origin: center; }
   @keyframes spin { to { transform: rotate(360deg); } }
 }
+/* motion: start times are set inline, so a redraw resumes an animation instead of restarting it */
+.a-move { animation: wg-move 650ms cubic-bezier(.4, 0, .3, 1) both; }
+.a-pop { animation: wg-pop 700ms cubic-bezier(.3, 1.5, .5, 1) both; transform-box: fill-box; transform-origin: center; }
+.a-brick { fill: color-mix(in srgb, var(--accent) 72%, var(--wall)); stroke: var(--cell); stroke-width: .6; transform-box: fill-box; transform-origin: center; animation: wg-brick 280ms cubic-bezier(.3, 1.7, .5, 1) both; }
+.a-brick.l2 { fill: var(--accent); }
+.wall.a-wallin { animation: wg-in 200ms ease-out both; }
+.wall.a-hold { animation: wg-out 1ms linear both; }
+.a-shard { fill: var(--wall); transform-box: fill-box; transform-origin: center; animation: wg-shard 620ms cubic-bezier(.12, .7, .3, 1) both; }
+.a-ring { fill: none; stroke: var(--warn); stroke-width: 3; transform-box: fill-box; transform-origin: center; animation: wg-ring 450ms ease-out both; }
+@keyframes wg-move { 0% { transform: translate(var(--x0), var(--y0)); } 50% { transform: translate(var(--x1), var(--y1)); } 100% { transform: translate(0, 0); } }
+@keyframes wg-pop { 0% { transform: scale(0); opacity: 0; } 60% { opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes wg-brick { 0% { transform: translateY(7px) scale(.15); opacity: 0; } 55% { opacity: 1; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
+@keyframes wg-in { 0% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes wg-out { 0% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes wg-shard { 0% { transform: translate(0, 0) rotate(0deg) scale(1); opacity: 0; } 1% { opacity: 1; } 65% { opacity: 1; } 100% { transform: translate(var(--fx), var(--fy)) rotate(var(--fr)) scale(.8); opacity: 0; } }
+@keyframes wg-ring { 0% { transform: scale(.15); opacity: 0; } 10% { opacity: .9; } 100% { transform: scale(1.5); opacity: 0; } }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .controls .grow { flex: 1; }
 .note { font-size: 13px; color: var(--muted); }
@@ -162,6 +198,7 @@ footer { font-size: 12px; color: var(--muted); }
       <li>移動後，必須在棋子所在格的四邊之一蓋一道牆。</li>
       <li>破牆：每人一次，只能拆正好擋在移動路徑上的牆。選棋子後出現的橘點就是要破牆才到得了的格子。</li>
       <li>破牆那一手之後要不要蓋牆，節目原文沒有查到，開局時可以選「照常蓋牆」或「不蓋牆」。</li>
+      <li>悔棋（開局時可選「點兩下才確定」）：移動、破牆、蓋牆第一次點只是預覽，用虛線顯示；在同一道牆（擺棋子時是同一格）再點一次才算數，之後不能再改。預覽時點別處可以改，點原本的棋子或「復原上一動」可以收回。</li>
       <li>所有人的棋子都被隔開時立即結束，沒用掉的破牆不保留。</li>
       <li>領地最大者存活，另外兩人進入一對一：排名較高的人改拿紅棋，另一人改拿藍棋。</li>
     </ul>
@@ -185,8 +222,8 @@ footer { font-size: 12px; color: var(--muted); }
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="config.js?v=2"></script>
-<script src="net-firebase.js?v=3"></script>
-<script src="engine.js?v=3"></script>
-<script src="app.js?v=3"></script>
+<script src="net-firebase.js?v=5"></script>
+<script src="engine.js?v=5"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

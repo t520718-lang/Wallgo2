@@ -12,7 +12,8 @@
 
   var S = {
     view: "home", kind: null, match: null, ui: {}, stamp: "",
-    setup: { n: 3, timer: 90, brkNoWall: false },
+    setup: { n: 3, timer: 90, brkNoWall: false, undo: true },
+    animOn: true, anim: null, nextAnim: null,
     net: "loading", db: null, user: null, myId: null, canWrite: null,
     code: null, ref: null, room: null, unsub: null, busy: false, missing: false, slow: false, loadT: null,
     names: {}, asked: {}, dests: [], saved: null, nick: ""
@@ -97,14 +98,74 @@
   }
 
   /* ---------- starting and leaving ---------- */
-  function setupOpts() { return { timer: S.setup.timer, brkNoWall: S.setup.n === 3 && !!S.setup.brkNoWall }; }
+  function setupOpts() { return { timer: S.setup.timer, brkNoWall: S.setup.n === 3 && !!S.setup.brkNoWall, undo: !!S.setup.undo }; }
   function startLocal(resume) {
-    S.kind = "local"; S.view = "game"; S.ui = {};
+    S.kind = "local"; S.view = "game"; S.ui = {}; S.stamp = ""; S.anim = null;
     if (resume && S.saved) { S.match = S.saved; S.match.turnAt = Date.now(); }
     else { S.match = WG.newMatch(S.setup.n, setupOpts()); S.match.turnAt = Date.now(); saveLocal(S.match); }
     render();
   }
+  /* ---------- who is still here ----------
+     S.pres.map says, per device id, whether that player still has the room open. The standalone site learns it from the
+     database connection itself (closing the page or losing the network counts). Inside Claude there is no such signal,
+     so a player is only marked away when they press 離開. */
+  function startPresence() {
+    stopPresence();
+    S.pres = { map: {}, since: {}, shown: {}, dismissed: {}, stop: null };
+    var code = S.code, id = S.myId, pres = S.pres;
+    // presence only counts once the store has actually answered; until then nobody is reported away
+    function got(map) { if (S.pres !== pres) return; pres.active = true; pres.map = map || {}; presenceTick(); }
+    try {
+      if (S.db.presence) pres.stop = S.db.presence(code, id + "", TAB, got);
+      else if (S.db.collection) {
+        var mine = S.db.doc("rooms/" + code + "/seen/" + id);
+        mine.set({ here: true, at: Date.now() }).then(null, function () {});
+        var un = S.db.collection("rooms/" + code + "/seen").onSnapshot(function (qs) {
+          var map = {}; qs.docs.forEach(function (d) { var v = d.data() || {}; map[d.id] = v.here !== false; }); got(map);
+        }, function () {});
+        pres.known = true; // an id with no record here has simply never reported: treat it as present
+        pres.stop = function () { try { un(); } catch (e) { /* ignore */ } mine.set({ here: false, at: Date.now() }).then(null, function () {}); };
+      }
+    } catch (e) { /* presence is a convenience; play goes on without it */ }
+  }
+  function stopPresence() { if (S.pres && S.pres.stop) { try { S.pres.stop(); } catch (e) { /* ignore */ } } S.pres = null; }
+  function isAway(id) {
+    var pr = S.pres;
+    if (!pr || !pr.active || !id || id === S.myId) return false;
+    if (pr.known) return pr.map[id] === false;
+    return !pr.map[id];
+  }
+  function idLabel(id) {
+    var m = S.match, ps = m && m.game ? m.game.order : [];
+    for (var i = 0; i < ps.length; i++) if (seatOf(ps[i]) === id) return label(ps[i]);
+    return (S.names[id] || "一位玩家");
+  }
+  // Called twice a second: notice players going away (after a few seconds, so a page refresh does not count) and coming back.
+  function presenceTick() {
+    var pr = S.pres;
+    if (!pr || S.kind !== "online" || !S.room || !S.match) return;
+    var changed = false, now = Date.now();
+    S.room.seats.forEach(function (id) {
+      if (!id || id === S.myId) return;
+      if (isAway(id)) {
+        if (!pr.since[id]) pr.since[id] = now;
+        if (!pr.shown[id] && now - pr.since[id] > 4000) { pr.shown[id] = true; changed = true; }
+      } else if (pr.since[id]) {
+        if (pr.shown[id]) { toast(idLabel(id) + " 回來了。"); changed = true; }
+        delete pr.since[id]; delete pr.shown[id]; delete pr.dismissed[id];
+      }
+    });
+    if (changed) render();
+  }
+  function awayIds() {
+    var pr = S.pres, out = [];
+    if (pr && S.room) S.room.seats.forEach(function (id) { if (id && pr.shown[id] && out.indexOf(id) < 0) out.push(id); });
+    return out;
+  }
+  window.addEventListener("pagehide", function () { if (S.pres && S.pres.stop) { try { S.pres.stop(); } catch (e) { /* ignore */ } } });
+
   function leave() {
+    stopPresence();
     if (S.unsub) { try { S.unsub(); } catch (e) { /* ignore */ } }
     clearTimeout(S.loadT);
     S.unsub = null; S.kind = null; S.room = null; S.match = null; S.code = null; S.ref = null;
@@ -137,10 +198,11 @@
   function enterRoom(code) {
     if (S.unsub) { try { S.unsub(); } catch (e) { /* ignore */ } }
     S.kind = "online"; S.code = code; S.ref = S.db.doc("rooms/" + code);
-    S.room = null; S.match = null; S.view = "room"; S.ui = {}; S.missing = false; S.slow = false;
+    S.room = null; S.match = null; S.view = "room"; S.ui = {}; S.missing = false; S.slow = false; S.stamp = ""; S.anim = null;
     setHash("r-" + code);
     clearTimeout(S.loadT);
     S.loadT = setTimeout(function () { S.slow = true; render(); }, 10000);
+    startPresence();
     S.unsub = S.ref.onSnapshot(function (snap) {
       if (!snap.metadata || !snap.metadata.fromCache) { clearTimeout(S.loadT); S.slow = false; }
       if (!snap.exists) { if (!snap.metadata || !snap.metadata.fromCache) { S.missing = true; S.room = null; S.match = null; render(); } return; }
@@ -150,6 +212,75 @@
       askNames(); render();
     }, function (e) { clearTimeout(S.loadT); toast(errMsg(e)); S.slow = true; render(); });
     render();
+  }
+
+  /* ---------- animation ----------
+     Played only in room play, when someone else's finished turn arrives: the piece travels, a broken wall
+     shatters as the piece hits it, then the new wall is laid brick by brick.
+     S.anim = {t0, place:[r,c], move:{pi, from, path}, broke:key, hit:{k, dr, dc}, wall:key}.
+     Every part starts at a time on one shared clock; a redraw mid-way resumes it with a negative delay. */
+  var D_MOVE = 650, D_SHARD = 620, D_WALL = 1000, D_PLACE = 700, BRICK_GAP = 75;
+  function animPlan(an) {
+    var p = { move: 0, hit: 0, wall: an.move ? D_MOVE : 0 };
+    if (an.broke && an.hit) p.hit = D_MOVE * (an.hit.k + 0.5) / an.move.path.length;
+    p.end = an.place ? D_PLACE : Math.max(an.move ? D_MOVE : 0, an.wall ? p.wall + D_WALL : 0, an.broke ? p.hit + D_SHARD : 0);
+    return p;
+  }
+  function setAnim(an) { S.anim = S.animOn && an ? an : null; if (S.anim) S.anim.t0 = Date.now(); }
+  function liveAnim() {
+    var an = S.anim;
+    if (!an) return null;
+    if (Date.now() - an.t0 > animPlan(an).end + 80) { S.anim = null; return null; }
+    return an;
+  }
+  function delayCss(an, start) { return "animation-delay:" + Math.round(start - (Date.now() - an.t0)) + "ms;"; }
+  function lastAnim(last) {
+    if (!last) return null;
+    if (last.kind === "place") return { place: last.to };
+    var an = { move: { pi: last.pi, from: last.from, path: last.path || [last.to] }, broke: last.broke || null, wall: last.wall || null, hit: null };
+    if (an.broke) { // which step of the path runs into the broken wall, and in which direction
+      var prev = last.from;
+      an.move.path.forEach(function (cell, k) {
+        for (var d = 0; d < 4; d++) if (prev[0] + WG.DIRS[d][0] === cell[0] && prev[1] + WG.DIRS[d][1] === cell[1] && WG.edgeKey(prev[0], prev[1], d) === an.broke)
+          an.hit = { k: k, dr: WG.DIRS[d][0], dc: WG.DIRS[d][1] };
+        prev = cell;
+      });
+      if (!an.hit) an.hit = { k: 0, dr: 0, dc: 0 };
+    }
+    return an;
+  }
+  try { var sv = localStorage.getItem("wg2-anim"); S.animOn = sv === null ? !(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) : sv === "1"; } catch (e) { /* keep default */ }
+
+  // A wall as small blocks along its length: [x, y, w, h] each. offset=true shifts the row by half a block, like a second course of bricks.
+  function wallBlocks(l, n, offset) {
+    var horiz = l[1] === l[3], a0 = (horiz ? l[0] : l[1]) + 6, len = C - 12, unit = len / n, out = [], T = 7;
+    var cuts = [];
+    if (!offset) for (var i = 0; i <= n; i++) cuts.push(i * unit);
+    else { cuts.push(0); for (var j = 0; j < n; j++) cuts.push((j + 0.5) * unit); cuts.push(len); }
+    for (var k = 0; k < cuts.length - 1; k++) {
+      var s = a0 + cuts[k] + 0.6, w = cuts[k + 1] - cuts[k] - 1.2;
+      out.push(horiz ? [s, l[1] - T / 2, w, T] : [l[0] - T / 2, s, T, w]);
+    }
+    return out;
+  }
+  function blockSvg(b, cls, style) { return '<rect class="' + cls + '" style="' + style + '" x="' + b[0].toFixed(1) + '" y="' + b[1].toFixed(1) + '" width="' + b[2].toFixed(1) + '" height="' + b[3].toFixed(1) + '" rx="1.2"/>'; }
+  // New wall: a first course of bricks rises from the floor one by one, a second course is set on top, then the finished wall.
+  function bricksSvg(l, an, start, cls) {
+    var out = "", t = start;
+    wallBlocks(l, 4, false).forEach(function (b) { out += blockSvg(b, "a-brick", delayCss(an, t)); t += BRICK_GAP; });
+    t += 60;
+    wallBlocks(l, 4, true).forEach(function (b) { out += blockSvg(b, "a-brick l2", delayCss(an, t)); t += BRICK_GAP; });
+    return out + lineSvg(l, cls + " a-wallin", delayCss(an, start + D_WALL - 200));
+  }
+  // Broken wall: it stands until the piece reaches it, then bursts into shards thrown the way the piece is travelling.
+  var SPREAD = [-20, 14, -8, 22, -16, 6, 18, -12], REACH = [38, 56, 30, 48, 60, 34, 46, 52], SPIN = [-220, 160, 300, -140, 240, -280, 120, -190];
+  function shardsSvg(l, an, at) {
+    var out = lineSvg(l, "a-hold", delayCss(an, at)), h = an.hit;
+    wallBlocks(l, 8, false).forEach(function (b, i) {
+      var fx = h.dc * REACH[i] + (h.dr ? SPREAD[i] : SPREAD[i] * 0.35), fy = h.dr * REACH[i] + (h.dc ? SPREAD[i] : SPREAD[i] * 0.35);
+      out += blockSvg(b, "a-shard", "--fx:" + fx.toFixed(0) + "px;--fy:" + fy.toFixed(0) + "px;--fr:" + SPIN[i] + "deg;" + delayCss(an, at + (i % 3) * 25));
+    });
+    return out + '<circle class="a-ring" style="' + delayCss(an, at) + '" cx="' + (l[0] + l[2]) / 2 + '" cy="' + (l[1] + l[3]) / 2 + '" r="16"/>';
   }
 
   /* ---------- the board ---------- */
@@ -165,10 +296,16 @@
     var m = /^([hv])(\d)_(\d)$/.exec(k);
     return sideLine(+m[2], +m[3], m[1] === "h" ? 2 : 1);
   }
-  function lineSvg(l, cls) {
+  function lineSvg(l, cls, style) {
     var horiz = l[1] === l[3], i = 6;
-    return '<line class="wall ' + cls + '" x1="' + (l[0] + (horiz ? i : 0)) + '" y1="' + (l[1] + (horiz ? 0 : i)) +
+    return '<line class="wall ' + cls + '"' + (style ? ' style="' + style + '"' : "") + ' x1="' + (l[0] + (horiz ? i : 0)) + '" y1="' + (l[1] + (horiz ? 0 : i)) +
       '" x2="' + (l[2] - (horiz ? i : 0)) + '" y2="' + (l[3] - (horiz ? 0 : i)) + '"/>';
+  }
+  // A wall drawn as a rounded bar, for the sides on offer and the one being previewed.
+  function barSvg(l, cls) {
+    var horiz = l[1] === l[3], i = 7, T = 8;
+    var x = horiz ? l[0] + i : l[0] - T / 2, y = horiz ? l[1] - T / 2 : l[1] + i, w = horiz ? C - 2 * i : T, h = horiz ? T : C - 2 * i;
+    return '<rect class="' + cls + '" x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="4"/>';
   }
   function hitSvg(l, attrs) {
     var horiz = l[1] === l[3], t = 17;
@@ -177,8 +314,8 @@
     return '<rect class="hit" x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" ' + attrs + "/>";
   }
   function cellHit(r, c, attrs) { return '<rect class="hit" x="' + X(c) + '" y="' + X(r) + '" width="' + C + '" height="' + C + '" ' + attrs + "/>"; }
-  function pieceSvg(pc, r, c, extra) {
-    var cx = X(c) + C / 2, cy = X(r) + C / 2, cls = "pc p" + pc.p + (extra ? " " + extra : "");
+  function pieceSvg(pc, r, c, extra, style) {
+    var cx = X(c) + C / 2, cy = X(r) + C / 2, cls = "pc p" + pc.p + (extra ? " " + extra : "") + '"' + (style ? ' style="' + style : "");
     return pc.t === "s"
       ? '<rect class="' + cls + '" x="' + (cx - 18) + '" y="' + (cy - 18) + '" width="36" height="36" rx="6"/>'
       : '<circle class="' + cls + '" cx="' + cx + '" cy="' + cy + '" r="19"/>';
@@ -194,12 +331,17 @@
       if (last.from && last.from[0] === r && last.from[1] === c) cls += " from";
       out.push('<rect class="' + cls + '" x="' + (X(c) + 2) + '" y="' + (X(r) + 2) + '" width="' + (C - 4) + '" height="' + (C - 4) + '" rx="5"/>');
     }
-    var pend = ui.pend || null;
+    var pend = ui.pend || null, an = liveAnim(), plan = an ? animPlan(an) : null;
     Object.keys(g.walls).forEach(function (wk) {
       var cl = pend && pend.brk === wk ? "gone" : (last.wall === wk ? "new" : "");
-      out.push(lineSvg(keyLine(wk), cl));
+      if (an && an.wall === wk) out.push(bricksSvg(keyLine(wk), an, plan.wall, cl));
+      else out.push(lineSvg(keyLine(wk), cl));
     });
+    var overlay = an && an.broke ? shardsSvg(keyLine(an.broke), an, plan.hit) : ""; // drawn above the pieces
     out.push('<rect class="frame" x="' + P + '" y="' + P + '" width="' + C * N + '" height="' + C * N + '" rx="4"/>');
+    // the clock: the board's own frame, lit in colour and burning down as time runs out
+    if (g.phase !== "over" && S.match && S.match.opts && S.match.opts.timer)
+      out.push('<rect class="tframe" id="tframe" pathLength="100" stroke-dasharray="100 100" x="' + P + '" y="' + P + '" width="' + C * N + '" height="' + C * N + '" rx="4"/>');
 
     var cur = WG.current(g), moves = [], movable = {};
     if (g.phase === "play" && act) {
@@ -211,17 +353,35 @@
     // pieces
     g.pieces.forEach(function (pc, pi) {
       var pr = pc.r, pcn = pc.c;
-      if (pend && pend.pi === pi) { out.push(pieceSvg(pc, pc.r, pc.c, "ghost")); pr = pend.to[0]; pcn = pend.to[1]; }
+      if (pend && pend.pi === pi) {
+        out.push(pieceSvg(pc, pc.r, pc.c, "")); hits.push(cellHit(pc.r, pc.c, 'data-a="back" aria-label="收回這一步"'));
+        var pts = [[pc.r, pc.c]].concat(pend.path).map(function (q) { return (X(q[1]) + C / 2) + "," + (X(q[0]) + C / 2); }).join(" ");
+        out.push('<polyline class="trail" style="stroke:var(--p' + pc.p + ')" points="' + pts + '"/>');
+        out.push(pieceSvg(pc, pend.to[0], pend.to[1], "pre"));
+        if (!WG.needsWall(g, pend)) hits.push(cellHit(pend.to[0], pend.to[1], 'data-a="confirm" data-pre="1" aria-label="再點一次確定"'));
+        return;
+      }
       var sealed = own[pc.r + "," + pc.c] !== undefined && g.phase === "play" && !(g.round === 1 && g.brk[pc.p]);
-      out.push(pieceSvg(pc, pr, pcn, sealed ? "locked" : ""));
+      var pcls = sealed ? "locked" : "", pst = "";
+      if (an && an.move && an.move.pi === pi) {
+        var mid = an.move.path.length > 1 ? an.move.path[0] : [(an.move.from[0] + pr) / 2, (an.move.from[1] + pcn) / 2];
+        pcls += " a-move";
+        pst = "--x0:" + (an.move.from[1] - pcn) * C + "px;--y0:" + (an.move.from[0] - pr) * C + "px;--x1:" + (mid[1] - pcn) * C + "px;--y1:" + (mid[0] - pr) * C + "px;" + delayCss(an, plan.move);
+      } else if (an && an.place && an.place[0] === pr && an.place[1] === pcn) { pcls += " a-pop"; pst = delayCss(an, 0); }
+      out.push(pieceSvg(pc, pr, pcn, pcls, pst));
       var cx = X(pcn) + C / 2, cy = X(pr) + C / 2;
       if ((ui.sel === pi && !pend) || (pend && pend.pi === pi)) out.push('<circle class="ring" cx="' + cx + '" cy="' + cy + '" r="26"/>');
       else if (movable[pi] && !pend) out.push('<circle class="ring can" cx="' + cx + '" cy="' + cy + '" r="26"/>');
       if (movable[pi] && !pend) hits.push(cellHit(pc.r, pc.c, 'data-a="pc" data-i="' + pi + '" aria-label="選這枚棋子"'));
     });
     // placement spots
+    var pp = g.phase === "place" && act ? ui.pplace : null;
+    if (pp) {
+      out.push(pieceSvg({ p: cur, t: pp.t }, pp.r, pp.c, "pre", ""));
+      hits.push(cellHit(pp.r, pp.c, 'data-a="cell" data-pre="1" data-r="' + pp.r + '" data-c="' + pp.c + '" aria-label="再點一次確定"'));
+    }
     if (g.phase === "place" && act) {
-      for (r = 0; r < N; r++) for (c = 0; c < N; c++) if (WG.pieceAt(g, r, c) < 0) {
+      for (r = 0; r < N; r++) for (c = 0; c < N; c++) if (WG.pieceAt(g, r, c) < 0 && !(pp && pp.r === r && pp.c === c)) {
         out.push('<circle class="spot" cx="' + (X(c) + C / 2) + '" cy="' + (X(r) + C / 2) + '" r="5"/>');
         hits.push(cellHit(r, c, 'data-a="cell" data-r="' + r + '" data-c="' + c + '"'));
       }
@@ -246,9 +406,10 @@
     // where the new wall can go
     if (pend && WG.needsWall(g, pend)) WG.wallSides(g, pend).forEach(function (d) {
       var l = sideLine(pend.to[0], pend.to[1], d);
-      out.push(lineSvg(l, "cand")); hits.push(hitSvg(l, 'data-a="wall" data-d="' + d + '" aria-label="在這一邊蓋牆"'));
+      if (ui.pwall === d) { out.push(barSvg(l, "wallpre")); hits.push(hitSvg(l, 'data-a="wall" data-pre="1" data-d="' + d + '" aria-label="再點一次確定蓋牆"')); return; }
+      out.push(barSvg(l, "wallcand" + (ui.pwall !== undefined ? " dim" : ""))); hits.push(hitSvg(l, 'data-a="wall" data-d="' + d + '" aria-label="在這一邊蓋牆"'));
     });
-    return '<svg class="board" id="board" viewBox="0 0 ' + SIZE + " " + SIZE + '" role="img" aria-label="7 乘 7 棋盤">' + out.join("") + hits.join("") + "</svg>";
+    return '<svg class="board" id="board" viewBox="0 0 ' + SIZE + " " + SIZE + '" role="img" aria-label="7 乘 7 棋盤">' + out.join("") + overlay + hits.join("") + "</svg>";
   }
 
   /* ---------- views ---------- */
@@ -261,7 +422,9 @@
     var h = '<section class="panel"><h2>對局設定</h2>' +
       '<div class="row"><span class="note">人數</span>' + seg("segN", [[3, "三人局接一對一"], [2, "只下一對一"]], S.setup.n) + "</div>" +
       '<div class="row"><span class="note">每步限時</span>' + seg("segT", [[90, "90 秒"], [0, "不限時"]], S.setup.timer) + "</div>" +
-      (S.setup.n === 3 ? '<div class="row"><span class="note">破牆那一手</span>' + seg("segB", [[0, "照常蓋牆"], [1, "不蓋牆"]], S.setup.brkNoWall ? 1 : 0) + "</div>" : "") + "</section>";
+      (S.setup.n === 3 ? '<div class="row"><span class="note">破牆那一手</span>' + seg("segB", [[0, "照常蓋牆"], [1, "不蓋牆"]], S.setup.brkNoWall ? 1 : 0) + "</div>" : "") +
+      '<div class="row"><span class="note">悔棋</span>' + seg("segU", [[1, "點兩下才確定"], [0, "點一下就確定"]], S.setup.undo ? 1 : 0) + "</div>" +
+      '<div class="row"><span class="note">連線時播放對手動作的動畫（只影響這台裝置）</span>' + seg("segA", [[1, "開"], [0, "關"]], S.animOn ? 1 : 0) + "</div></section>";
     h += '<section class="panel"><h2>同機輪流</h2><p>大家共用這台裝置，輪到誰就把裝置交給誰。</p><div class="row">' +
       '<button class="primary" type="button" id="goLocal">開始新對局</button>' +
       (S.saved && S.saved.game ? '<button type="button" id="goResume">接著下上一局</button>' : "") + "</div></section>";
@@ -285,7 +448,7 @@
     h += '<section class="panel"><p>房號</p><div class="code">' + esc(room.code) + "</div>" +
       (window.WG_STANDALONE ? '<div class="row"><button class="small" type="button" id="goCopy">複製邀請連結</button></div>' : "") +
       "<p>把房號" + (window.WG_STANDALONE ? "或邀請連結" : "") + "告訴對手，請他們打開這一頁，輸入房號後入座。" +
-      (room.n === 3 ? "三人局接一對一" : "只下一對一") + "，" + (room.opts && room.opts.timer ? "每步 " + room.opts.timer + " 秒" : "不限時") + (room.n === 3 ? "，破牆那一手" + (room.opts && room.opts.brkNoWall ? "不蓋牆" : "照常蓋牆") : "") + "。</p></section>";
+      (room.n === 3 ? "三人局接一對一" : "只下一對一") + "，" + (room.opts && room.opts.timer ? "每步 " + room.opts.timer + " 秒" : "不限時") + (room.n === 3 ? "，破牆那一手" + (room.opts && room.opts.brkNoWall ? "不蓋牆" : "照常蓋牆") : "") + "，" + (room.opts && room.opts.undo ? "點兩下才確定（回合內可悔棋）" : "點一下就確定") + "。</p></section>";
     h += '<section class="panel"><h2>座位</h2>' +
       (S.user && S.user.setName && !seated() ? '<div class="row"><label class="fld" for="nickIn">暱稱（對手看得到）<input type="text" class="plain" id="nickIn" maxlength="12" autocomplete="off" value="' + esc(S.nick) + '"></label></div>' : "") +
       '<div class="seats">';
@@ -306,10 +469,13 @@
     if (g.phase === "place") {
       var ts = WG.placeTypes(g);
       if (!act) return "等待 " + label(cur) + " 擺放棋子";
+      if (ui.pplace) return label(cur) + "：再點一次同一格確定，或點別格改位置";
       return label(cur) + "：點一個空格，擺放" + (ts.length === 1 ? TYPE[ts[0]] : "") + "棋子";
     }
     if (!act) return "等待 " + label(cur) + " 下棋";
-    if (ui.pend) return label(cur) + (WG.needsWall(g, ui.pend) ? "：點虛線，選一邊蓋牆" : "：這一手破牆後不蓋牆，按「確認破牆」");
+    var undoOn = !!(g.opts && g.opts.undo);
+    if (ui.pend && ui.pwall !== undefined) return label(cur) + "：再點一次同一道牆確定，或點別邊改位置";
+    if (ui.pend) return label(cur) + (WG.needsWall(g, ui.pend) ? "：點棋子旁淡色的邊，選一邊蓋牆" + (undoOn ? "" : "（點了就結束回合）") : "：這一手破牆後不蓋牆，再點一次棋子確定");
     if (ui.brkOpts) return label(cur) + "：點要拆掉的牆";
     if (ui.sel !== undefined && ui.sel !== null) return label(cur) + "：選目的地" + (g.round === 1 && g.brk[cur] ? "（橘點要用掉破牆）" : "");
     return label(cur) + "：選一枚棋子";
@@ -334,7 +500,12 @@
     var m = S.match, g = m.game, cur = WG.current(g), act = canAct(cur), sc = WG.scores(g), h = "";
     // reset the half-made move whenever the position changes underneath us
     var stamp = [S.code, m.stage, m.replays, g.phase, g.moveNo, g.queue.length, cur].join("|");
-    if (stamp !== S.stamp) { S.stamp = stamp; S.ui = {}; }
+    if (stamp !== S.stamp) {
+      var fresh = !S.stamp || S.stamp.split("|")[0] !== String(S.code || ""); // first sight of this game: nothing to replay
+      var mode = S.nextAnim || "full"; S.nextAnim = null;
+      S.stamp = stamp; S.ui = {};
+      setAnim(fresh || mode === "none" || S.kind !== "online" ? null : lastAnim(g.last));
+    }
     var ids = g.round === 1 ? [0, 1, 2] : [0, 1];
     h += '<div class="game"><div class="g-top"><div class="scores">';
     ids.forEach(function (p) {
@@ -342,6 +513,7 @@
       if (!inGame) sub = "已存活";
       else if (g.round === 1) sub = "破牆 " + (g.brk[p] ? "可用" : "已用");
       else sub = g.order[0] === p ? "先手" : "後手";
+      if (inGame && S.kind === "online" && awayIds().indexOf(seatOf(p)) >= 0) sub = "已離線";
       h += '<div class="chip' + (cur === p ? " turn" : "") + (inGame ? "" : " dim") + '" style="--pc:var(--p' + p + ')"><span class="n">' + (inGame ? sc[p].total : "–") +
         '</span><span class="who">' + esc(label(p)) + '</span><span class="sub">' + sub + "</span></div>";
     });
@@ -352,13 +524,17 @@
         (m.opts && m.opts.timer ? '<span class="timer" id="timer">--</span>' : "") + "</div>";
     }
     h += '</div><div class="boardarea"><div class="boardbox">' + boardHtml + '</div></div><div class="g-bottom">';
+    var gone = S.kind === "online" ? awayIds().filter(function (id) { return !S.pres.dismissed[id]; }) : [];
+    if (gone.length) h += '<div class="warnbox" id="awayBox"><b>' + gone.map(function (id) { return esc(idLabel(id)); }).join("、") + " 離開了房間或斷線了。</b>" +
+      "可以等對方回來接著下，或是離開房間。" + (m.opts && m.opts.timer ? "對方的時間照常倒數。" : "") +
+      '<div class="row" style="margin-top:8px"><button type="button" id="goWait">繼續等待</button><button type="button" id="goQuit">離開房間</button></div></div>';
     if (g.phase !== "over") {
       h += '<div class="controls">';
       if (g.phase === "place" && act && WG.placeTypes(g).length > 1)
         h += '<span class="note">要擺的棋子</span>' + seg("segP", [["s", "方形"], ["r", "圓形"]], S.ui.ptype || "s");
-      if (g.phase === "play" && act && S.ui.pend && !WG.needsWall(g, S.ui.pend)) h += '<button class="primary" type="button" id="goConfirm">確認破牆</button>';
-      if (g.phase === "play" && act && (S.ui.pend || S.ui.brkOpts)) h += '<button type="button" id="goCancel">重選這一步</button>';
-      h += '<span class="grow"></span><button class="small hidden" type="button" id="goForce">對方逾時，代下隨機一手</button></div>';
+      var ui = S.ui, undoOn = !!(m.opts && m.opts.undo);
+      if (act && (ui.pplace || ui.pend || ui.brkOpts)) h += '<button type="button" id="goUndo">復原上一動</button>';
+      h += '<span class="grow"></span>' + (S.kind === "online" ? '<button class="small ghost" type="button" id="goAnim">動畫：' + (S.animOn ? "開" : "關") + "</button>" : "") + '<button class="small hidden" type="button" id="goForce">對方逾時，代下隨機一手</button></div>';
       h += '<p class="note">' + (g.round === 1 ? "三人局" + (g.opts && g.opts.brkNoWall ? "（破牆那一手不蓋牆）" : "") : "一對一") + (g.round === 2 && m.safe !== null && m.safe !== undefined ? "（" + esc(seatLabel(m.safe)) + " 已存活）" : "") + "　方形直走 1 或 2 格；圓形走 1 格，或走 1 格後轉彎再 1 格。</p>";
     } else h += resultHtml(m);
     return h + "</div></div>";
@@ -384,55 +560,109 @@
   }
 
   /* ---------- actions ---------- */
-  function doPlace(r, c) {
-    var g = S.match.game, ts = WG.placeTypes(g);
-    var t = ts.length === 1 ? ts[0] : (S.ui.ptype || "s");
-    var m = WG.clone(S.match); m.game = WG.place(g, t, r, c); commit(m);
+  // mode "none": this device made the move itself, so there is nothing to replay; "full": it was made for the player (a timeout).
+  function placeType() { var ts = WG.placeTypes(S.match.game); return ts.length === 1 ? ts[0] : (S.ui.ptype || "s"); }
+  function doPlace(r, c, t, mode) {
+    var m = WG.clone(S.match); m.game = WG.place(S.match.game, t || placeType(), r, c); S.nextAnim = mode || "none"; commit(m);
   }
-  function doTurn(mv, d) {
-    var m = WG.clone(S.match); m.game = WG.applyTurn(S.match.game, mv, d); commit(m);
+  function doTurn(mv, d, mode) {
+    var m = WG.clone(S.match); m.game = WG.applyTurn(S.match.game, mv, d); S.nextAnim = mode || "none"; commit(m);
+  }
+  function undoOn() { var m = S.match; return !!(m && m.opts && m.opts.undo); }
+  // Finish the turn from whatever has been laid out so far.
+  function endTurn() {
+    var g = S.match.game, ui = S.ui;
+    try {
+      if (g.phase === "place" && ui.pplace) doPlace(ui.pplace.r, ui.pplace.c, ui.pplace.t, "none");
+      else if (g.phase === "play" && ui.pend) doTurn(ui.pend, WG.needsWall(g, ui.pend) ? ui.pwall : null, "none");
+    } catch (err) { S.ui = {}; render(); }
+  }
+  // Step back one action inside the turn: the wall first, then the move (and any wall it broke), then a placed piece.
+  function undoStep() {
+    var ui = S.ui;
+    if (ui.pwall !== undefined) delete ui.pwall;
+    else if (ui.pend || ui.brkOpts) { ui.pend = null; ui.brkOpts = null; }
+    else if (ui.pplace) delete ui.pplace;
+    render();
   }
   function autoPlay() {
     var g = S.match.game;
     if (g.phase === "place") {
       var free = [];
       for (var r = 0; r < N; r++) for (var c = 0; c < N; c++) if (WG.pieceAt(g, r, c) < 0) free.push([r, c]);
-      var f = free[Math.floor(Math.random() * free.length)]; doPlace(f[0], f[1]);
+      var f = free[Math.floor(Math.random() * free.length)];
+      if (S.ui.pplace) doPlace(S.ui.pplace.r, S.ui.pplace.c, S.ui.pplace.t, "none"); else doPlace(f[0], f[1], null, "full");
     } else if (g.phase === "play") {
-      if (S.ui.pend) { var ws = WG.wallSides(g, S.ui.pend); doTurn(S.ui.pend, WG.needsWall(g, S.ui.pend) ? ws[Math.floor(Math.random() * ws.length)] : null); }
-      else { var t = WG.randomTurn(g); doTurn(t.mv, t.wall); }
+      if (S.ui.pend) {
+        var ws = WG.wallSides(g, S.ui.pend), had = S.ui.pwall !== undefined;
+        doTurn(S.ui.pend, !WG.needsWall(g, S.ui.pend) ? null : had ? S.ui.pwall : ws[Math.floor(Math.random() * ws.length)], "none");
+      }
+      else { var t = WG.randomTurn(g); doTurn(t.mv, t.wall, "full"); }
     }
+  }
+  function setAnimOn(on) {
+    S.animOn = !!on; if (!on) S.anim = null;
+    try { localStorage.setItem("wg2-anim", on ? "1" : "0"); } catch (e) { /* optional */ }
   }
   function tick() {
     var m = S.match, el = $("timer");
-    if (!m || !m.game || m.game.phase === "over" || !(m.opts && m.opts.timer) || S.view === "home") return;
+    if (!m || !m.game || m.game.phase === "over" || !(m.opts && m.opts.timer) || S.view === "home") { presenceTick(); return; }
     var rem = m.opts.timer - (Date.now() - (m.turnAt || Date.now())) / 1000, cur = WG.current(m.game);
-    if (el) { var s = Math.max(0, Math.ceil(rem)); el.textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); el.classList.toggle("low", rem <= 15); }
+    var warn = rem <= Math.min(30, m.opts.timer / 3), crit = rem <= 10, mine = isMine(cur);
+    [el, $("tframe")].forEach(function (x) {
+      if (!x) return;
+      x.classList.toggle("warn", warn && !crit); x.classList.toggle("crit", crit); x.classList.toggle("mine", mine);
+    });
+    if (el) { var s = Math.max(0, Math.ceil(rem)); el.textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+    var bd = $("board");
+    if (bd) { bd.classList.toggle("t-crit", crit); bd.classList.toggle("t-mine", mine); }
+    var tf = $("tframe");
+    if (tf) tf.setAttribute("stroke-dasharray", Math.max(0, Math.min(100, rem / m.opts.timer * 100)).toFixed(1) + " 100");
     if (rem <= 0 && canAct(cur)) { toast(label(cur) + " 逾時，隨機下一手。"); autoPlay(); return; }
+    presenceTick();
     var fb = $("goForce");
     if (fb) fb.classList.toggle("hidden", !(S.kind === "online" && rem <= -10 && seated() && !isMine(cur) && !S.busy));
   }
   setInterval(tick, 500);
 
+  // Lay a move out on the board without committing it, and show it happening.
+  function pickMove(mv) {
+    var pc = S.match.game.pieces[mv.pi];
+    void pc; S.ui.pend = mv; delete S.ui.pwall;
+  }
   view.addEventListener("click", function (e) {
     var t = e.target, el;
     if ((el = t.closest("[data-a]"))) {
       var a = el.getAttribute("data-a"), ui = S.ui;
       if (a === "pc") { S.ui = { sel: +el.getAttribute("data-i"), ptype: ui.ptype }; render(); }
-      else if (a === "cell") doPlace(+el.getAttribute("data-r"), +el.getAttribute("data-c"));
+      else if (a === "cell") {
+        var pr = +el.getAttribute("data-r"), pc = +el.getAttribute("data-c");
+        if (undoOn() && ui.pplace && ui.pplace.r === pr && ui.pplace.c === pc) endTurn(); // second tap on the same cell
+        else if (undoOn()) { ui.pplace = { t: placeType(), r: pr, c: pc }; render(); }
+        else doPlace(pr, pc, null, "none");
+      }
       else if (a === "dest") {
         var d = S.dests[+el.getAttribute("data-i")];
-        if (d.opts.length === 1) ui.pend = d.opts[0]; else ui.brkOpts = d.opts;
+        if (d.opts.length === 1) pickMove(d.opts[0]); else ui.brkOpts = d.opts;
         render();
       }
-      else if (a === "brk") { ui.pend = ui.brkOpts[+el.getAttribute("data-i")]; ui.brkOpts = null; render(); }
-      else if (a === "wall") { try { doTurn(ui.pend, +el.getAttribute("data-d")); } catch (err) { S.ui = {}; render(); } }
+      else if (a === "confirm") endTurn();
+      else if (a === "back") { S.ui = { sel: ui.pend ? ui.pend.pi : undefined, ptype: ui.ptype }; render(); }
+      else if (a === "brk") { var bo = ui.brkOpts[+el.getAttribute("data-i")]; ui.brkOpts = null; pickMove(bo); render(); }
+      else if (a === "wall") {
+        var wd = +el.getAttribute("data-d");
+        if (undoOn() && ui.pwall === wd) endTurn(); // second tap on the same side
+        else if (undoOn()) { ui.pwall = wd; render(); }
+        else { try { doTurn(ui.pend, wd, "none"); } catch (err) { S.ui = {}; render(); } }
+      }
       return;
     }
     if ((el = t.closest(".seg"))) {
       var b = t.closest("button"); if (!b) return;
       var v = b.getAttribute("data-v");
-      if (el.id === "segN") S.setup.n = +v; else if (el.id === "segT") S.setup.timer = +v; else if (el.id === "segB") S.setup.brkNoWall = v === "1"; else if (el.id === "segP") S.ui.ptype = v;
+      if (el.id === "segN") S.setup.n = +v; else if (el.id === "segT") S.setup.timer = +v; else if (el.id === "segB") S.setup.brkNoWall = v === "1"; else if (el.id === "segU") S.setup.undo = v === "1";
+      else if (el.id === "segA") setAnimOn(v === "1");
+      else if (el.id === "segP") { S.ui.ptype = v; if (S.ui.pplace) S.ui.pplace.t = v; }
       render(); return;
     }
     if ((el = t.closest("button"))) {
@@ -451,8 +681,11 @@
         try { navigator.clipboard.writeText(url).then(function () { toast("已複製邀請連結。"); }, function () { toast("複製失敗，請直接告訴對方房號 " + S.code + "。"); }); }
         catch (err) { toast("複製失敗，請直接告訴對方房號 " + S.code + "。"); }
       }
-      else if (id === "goConfirm") { try { doTurn(S.ui.pend, null); } catch (err) { S.ui = {}; render(); } }
-      else if (id === "goCancel") { S.ui = { ptype: S.ui.ptype }; render(); }
+      else if (id === "goEnd") endTurn();
+      else if (id === "goUndo") undoStep();
+      else if (id === "goWait") { awayIds().forEach(function (x) { S.pres.dismissed[x] = true; }); render(); }
+      else if (id === "goQuit") leave();
+      else if (id === "goAnim") { setAnimOn(!S.animOn); render(); }
       else if (id === "goForce") forceTurn();
       else if (id === "goNext") commit(WG.nextStage(S.match));
       else if (id === "goAgain") { var nm = WG.newMatch(S.match.n, S.match.opts); commit(nm); }
