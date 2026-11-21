@@ -105,6 +105,9 @@ svg.board { display: block; width: 100%; height: 100%; user-select: none; -webki
 .cell.own0 { fill: color-mix(in srgb, var(--p0) 26%, var(--cell)); }
 .cell.own1 { fill: color-mix(in srgb, var(--p1) 26%, var(--cell)); }
 .cell.own2 { fill: color-mix(in srgb, var(--p2) 30%, var(--cell)); }
+.cell.dead { fill: url(#deadfill); }
+.dead-bg { fill: color-mix(in srgb, var(--muted) 34%, var(--cell)); }
+.dead-ln { stroke: color-mix(in srgb, var(--muted) 70%, var(--cell)); stroke-width: 2.5; }
 .cell.from { stroke: var(--muted); stroke-width: 2; stroke-dasharray: 4 4; }
 .frame { fill: none; stroke: var(--wall); stroke-width: 6; }
 .wall { stroke: var(--wall); stroke-width: 7; stroke-linecap: round; }
@@ -139,7 +142,8 @@ svg.board { display: block; width: 100%; height: 100%; user-select: none; -webki
 }
 /* motion: start times are set inline, so a redraw resumes an animation instead of restarting it */
 .a-move { animation: wg-move 650ms cubic-bezier(.4, 0, .3, 1) both; }
-.a-pop { animation: wg-pop 700ms cubic-bezier(.3, 1.5, .5, 1) both; transform-box: fill-box; transform-origin: center; }
+.a-pop { animation: wg-pop 620ms ease-out both; transform-box: fill-box; transform-origin: center; }
+.a-ripple { fill: none; stroke-width: 3; transform-box: fill-box; transform-origin: center; animation: wg-ripple 520ms ease-out both; }
 .a-brick { fill: color-mix(in srgb, var(--accent) 72%, var(--wall)); stroke: var(--cell); stroke-width: .6; transform-box: fill-box; transform-origin: center; animation: wg-brick 280ms cubic-bezier(.3, 1.7, .5, 1) both; }
 .a-brick.l2 { fill: var(--accent); }
 .wall.a-wallin { animation: wg-in 200ms ease-out both; }
@@ -147,12 +151,50 @@ svg.board { display: block; width: 100%; height: 100%; user-select: none; -webki
 .a-shard { fill: var(--wall); transform-box: fill-box; transform-origin: center; animation: wg-shard 620ms cubic-bezier(.12, .7, .3, 1) both; }
 .a-ring { fill: none; stroke: var(--warn); stroke-width: 3; transform-box: fill-box; transform-origin: center; animation: wg-ring 450ms ease-out both; }
 @keyframes wg-move { 0% { transform: translate(var(--x0), var(--y0)); } 50% { transform: translate(var(--x1), var(--y1)); } 100% { transform: translate(0, 0); } }
-@keyframes wg-pop { 0% { transform: scale(0); opacity: 0; } 60% { opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes wg-pop { 0% { transform: translateY(-30px) scale(1.5); opacity: 0; } 45% { transform: translateY(0) scale(.88); opacity: 1; } 70% { transform: translateY(-5px) scale(1.06); } 100% { transform: translateY(0) scale(1); opacity: 1; } }
+@keyframes wg-ripple { 0% { transform: scale(.45); opacity: 0; } 15% { opacity: .8; } 100% { transform: scale(1.25); opacity: 0; } }
 @keyframes wg-brick { 0% { transform: translateY(7px) scale(.15); opacity: 0; } 55% { opacity: 1; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
 @keyframes wg-in { 0% { opacity: 0; } 100% { opacity: 1; } }
 @keyframes wg-out { 0% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes wg-shard { 0% { transform: translate(0, 0) rotate(0deg) scale(1); opacity: 0; } 1% { opacity: 1; } 65% { opacity: 1; } 100% { transform: translate(var(--fx), var(--fy)) rotate(var(--fr)) scale(.8); opacity: 0; } }
 @keyframes wg-ring { 0% { transform: scale(.15); opacity: 0; } 10% { opacity: .9; } 100% { transform: scale(1.5); opacity: 0; } }
+/* setup form: name + help on the left, choices on the right, explanation underneath */
+.sets { display: flex; flex-direction: column; }
+.set { display: grid; grid-template-columns: 10.5em minmax(0, 1fr); gap: 6px 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.set:first-child { border-top: 0; padding-top: 0; }
+.set-name { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+.set-ctl { display: flex; }
+.set-ctl .seg { flex: 1; } .set-ctl .seg button { flex: 1; }
+.panel p.set-help { grid-column: 1 / -1; background: var(--bg); border-radius: 8px; padding: 8px 12px; font-size: 14px; color: var(--ink); }
+button.help { min-height: 0; width: 24px; height: 24px; padding: 0; border-radius: 50%; font-size: 13px; font-weight: 700; color: var(--muted); flex: none; }
+button.help[aria-expanded="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+@media (max-width: 480px) { .set { grid-template-columns: 1fr; } }
+.modes { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-items: start; }
+.btns { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+.join { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.join input[type="text"] { width: 100%; }
+/* in-game side panel */
+.acts { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.acts-head { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+.acts-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.acts-row .seg { flex: 1; } .acts-row .seg button { flex: 1; }
+.acts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.acts-grid button { width: 100%; padding: 8px 6px; font-size: 15px; }
+.acts-grid button.wide { grid-column: 1 / -1; border-color: var(--warn); color: var(--warn); }
+.acts-grid button[aria-pressed="true"] { border-color: var(--accent); }
+.rcard { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px; }
+.rcard summary { cursor: pointer; padding: 8px 0; font-weight: 700; font-size: 15px; }
+.rcard ul { list-style: none; margin: 0; padding: 0 0 8px; display: flex; flex-direction: column; gap: 10px; }
+.rcard li { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center; }
+.rcard li div { display: flex; flex-direction: column; font-size: 13px; line-height: 1.45; }
+.rcard li b { font-size: 14px; } .rcard li span { color: var(--muted); }
+.ico { width: 44px; height: 44px; background: var(--bg); border-radius: 8px; }
+.i-pc { fill: var(--p0); } .i-cell { fill: var(--cell); stroke: var(--line); }
+.i-ar { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; } .i-arf { fill: var(--accent); }
+.i-dot { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
+.i-wall { stroke: var(--wall); stroke-width: 5; stroke-linecap: round; } .i-slot { stroke: var(--accent); stroke-width: 4; stroke-linecap: round; opacity: .3; }
+.i-shard { fill: var(--wall); }
+.i-own { fill: color-mix(in srgb, var(--p0) 30%, var(--cell)); } .i-own2 { fill: color-mix(in srgb, var(--p1) 30%, var(--cell)); } .i-crown { fill: var(--p2); }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .controls .grow { flex: 1; }
 .note { font-size: 13px; color: var(--muted); }
@@ -181,8 +223,8 @@ footer { font-size: 12px; color: var(--muted); }
     <h1>牆壁圍棋 II</h1>
     <span class="tag hidden" id="tag"></span>
     <button class="small ghost hidden" id="btnFull" type="button">全螢幕</button>
-    <button class="small ghost" id="btnRules" type="button">規則</button>
-    <button class="small ghost hidden" id="btnLeave" type="button">離開</button>
+    <button class="small ghost" id="btnRules" type="button">規則說明</button>
+    <button class="small ghost hidden" id="btnLeave" type="button">離開對局</button>
   </header>
 
   <section class="panel rules hidden" id="rules" aria-label="規則">
@@ -210,9 +252,10 @@ footer { font-size: 12px; color: var(--muted); }
     <h3 class="asm">本頁採用的補充判定</h3>
     <ul class="asm">
       <li>以下幾點節目原文沒有查到，是本頁的設定：棋盤 7×7；不能停在原地；圓形固定在四角內縮一格；同分先比最大單一區塊，再同分就重賽（三人局反轉順序，一對一雙方交換紅藍）。</li>
+      <li>被牆圍住、裡面沒有任何棋子的區塊是死區，不屬於任何人，棋盤上用灰色斜線標示。</li>
       <li>已被隔在自己領地裡的棋子不再移動。所有人都無法移動時結束，混在同一區塊的棋子各算腳下 1 格。</li>
     </ul>
-    <div class="row"><button type="button" id="btnRulesClose">關閉規則</button></div>
+    <div class="row"><button type="button" id="btnRulesClose">關閉</button></div>
   </section>
 
   <main id="view"></main>
@@ -222,8 +265,8 @@ footer { font-size: 12px; color: var(--muted); }
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="config.js?v=2"></script>
-<script src="net-firebase.js?v=5"></script>
-<script src="engine.js?v=5"></script>
-<script src="app.js?v=5"></script>
+<script src="net-firebase.js?v=6"></script>
+<script src="engine.js?v=6"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

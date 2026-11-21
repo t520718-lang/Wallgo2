@@ -215,11 +215,11 @@
   }
 
   /* ---------- animation ----------
-     Played only in room play, when someone else's finished turn arrives: the piece travels, a broken wall
+     Played only in room play, on every device in the room when a turn is finished: the piece travels, a broken wall
      shatters as the piece hits it, then the new wall is laid brick by brick.
      S.anim = {t0, place:[r,c], move:{pi, from, path}, broke:key, hit:{k, dr, dc}, wall:key}.
      Every part starts at a time on one shared clock; a redraw mid-way resumes it with a negative delay. */
-  var D_MOVE = 650, D_SHARD = 620, D_WALL = 1000, D_PLACE = 700, BRICK_GAP = 75;
+  var D_MOVE = 650, D_SHARD = 620, D_WALL = 1000, D_PLACE = 900, BRICK_GAP = 75;
   function animPlan(an) {
     var p = { move: 0, hit: 0, wall: an.move ? D_MOVE : 0 };
     if (an.broke && an.hit) p.hit = D_MOVE * (an.hit.k + 0.5) / an.move.path.length;
@@ -324,10 +324,16 @@
   function boardSvg(g, act) {
     var ui = S.ui, out = [], hits = [], r, c, i;
     var regs = WG.regions(g), own = {};
-    regs.forEach(function (rg) { if (rg.owners.length === 1) rg.cells.forEach(function (cl) { own[cl[0] + "," + cl[1]] = rg.owners[0]; }); });
+    var dead = {}; // sealed areas with no piece inside: nobody's territory
+    regs.forEach(function (rg) {
+      if (rg.owners.length === 1) rg.cells.forEach(function (cl) { own[cl[0] + "," + cl[1]] = rg.owners[0]; });
+      else if (rg.owners.length === 0 && regs.length > 1) rg.cells.forEach(function (cl) { dead[cl[0] + "," + cl[1]] = true; });
+    });
+    out.push('<defs><pattern id="deadfill" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">' +
+      '<rect class="dead-bg" width="8" height="8"/><line class="dead-ln" x1="0" y1="0" x2="0" y2="8"/></pattern></defs>');
     var last = g.last || {};
     for (r = 0; r < N; r++) for (c = 0; c < N; c++) {
-      var k = r + "," + c, cls = "cell" + (own[k] !== undefined ? " own" + own[k] : "");
+      var k = r + "," + c, cls = "cell" + (own[k] !== undefined ? " own" + own[k] : dead[k] ? " dead" : "");
       if (last.from && last.from[0] === r && last.from[1] === c) cls += " from";
       out.push('<rect class="' + cls + '" x="' + (X(c) + 2) + '" y="' + (X(r) + 2) + '" width="' + (C - 4) + '" height="' + (C - 4) + '" rx="5"/>');
     }
@@ -367,7 +373,10 @@
         var mid = an.move.path.length > 1 ? an.move.path[0] : [(an.move.from[0] + pr) / 2, (an.move.from[1] + pcn) / 2];
         pcls += " a-move";
         pst = "--x0:" + (an.move.from[1] - pcn) * C + "px;--y0:" + (an.move.from[0] - pr) * C + "px;--x1:" + (mid[1] - pcn) * C + "px;--y1:" + (mid[0] - pr) * C + "px;" + delayCss(an, plan.move);
-      } else if (an && an.place && an.place[0] === pr && an.place[1] === pcn) { pcls += " a-pop"; pst = delayCss(an, 0); }
+      } else if (an && an.place && an.place[0] === pr && an.place[1] === pcn) {
+        pcls += " a-pop"; pst = delayCss(an, 0);
+        out.push('<circle class="a-ripple" style="stroke:var(--p' + pc.p + ');' + delayCss(an, 330) + '" cx="' + (X(pcn) + C / 2) + '" cy="' + (X(pr) + C / 2) + '" r="30"/>');
+      }
       out.push(pieceSvg(pc, pr, pcn, pcls, pst));
       var cx = X(pcn) + C / 2, cy = X(pr) + C / 2;
       if ((ui.sel === pi && !pend) || (pend && pend.pi === pi)) out.push('<circle class="ring" cx="' + cx + '" cy="' + cy + '" r="26"/>');
@@ -418,37 +427,51 @@
       return '<button type="button" data-v="' + o[0] + '" aria-pressed="' + (String(o[0]) === String(val)) + '">' + o[1] + "</button>";
     }).join("") + "</span>";
   }
+  // One row of the setup form: formal name, a help button after it, the choices, and the explanation when opened.
+  var HELP = {
+    n: "三人局：三位玩家同場，領地最大者直接晉級，其餘兩位再進行一對一決勝局，敗者淘汰。雙人對局：直接進行一對一，紅方先手。",
+    t: "每手限時 90 秒。棋盤外框即為計時條，會隨時間縮短；剩 30 秒轉為橘色，最後 10 秒轉紅並閃爍。逾時由系統隨機落子。",
+    b: "僅適用於三人局。使用破牆的那一手，移動後是否仍須蓋一道牆。節目原始規則未能查證，請依雙方共識選擇。",
+    u: "二次點擊確認：第一次點擊僅為預覽（以虛線顯示），再次點擊同一位置才生效；生效前可改選或復原。單次點擊：點擊即生效，無法更改。",
+    a: "線上對局時，每回合結束後在所有裝置播放落子、移動、破牆與蓋牆的動畫。此設定僅影響本裝置；本機對局不播放動畫。"
+  };
+  function setRow(key, name, control) {
+    var open = S.help === key;
+    return '<div class="set"><div class="set-name"><span>' + name + '</span><button class="help" type="button" data-help="' + key + '" aria-expanded="' + open +
+      '" aria-label="' + name + "說明" + '">?</button></div><div class="set-ctl">' + control + "</div>" +
+      (open ? '<p class="set-help">' + HELP[key] + "</p>" : "") + "</div>";
+  }
   function homeHtml() {
-    var h = '<section class="panel"><h2>對局設定</h2>' +
-      '<div class="row"><span class="note">人數</span>' + seg("segN", [[3, "三人局接一對一"], [2, "只下一對一"]], S.setup.n) + "</div>" +
-      '<div class="row"><span class="note">每步限時</span>' + seg("segT", [[90, "90 秒"], [0, "不限時"]], S.setup.timer) + "</div>" +
-      (S.setup.n === 3 ? '<div class="row"><span class="note">破牆那一手</span>' + seg("segB", [[0, "照常蓋牆"], [1, "不蓋牆"]], S.setup.brkNoWall ? 1 : 0) + "</div>" : "") +
-      '<div class="row"><span class="note">悔棋</span>' + seg("segU", [[1, "點兩下才確定"], [0, "點一下就確定"]], S.setup.undo ? 1 : 0) + "</div>" +
-      '<div class="row"><span class="note">連線時播放對手動作的動畫（只影響這台裝置）</span>' + seg("segA", [[1, "開"], [0, "關"]], S.animOn ? 1 : 0) + "</div></section>";
-    h += '<section class="panel"><h2>同機輪流</h2><p>大家共用這台裝置，輪到誰就把裝置交給誰。</p><div class="row">' +
-      '<button class="primary" type="button" id="goLocal">開始新對局</button>' +
-      (S.saved && S.saved.game ? '<button type="button" id="goResume">接著下上一局</button>' : "") + "</div></section>";
-    h += '<section class="panel"><h2>連線對戰</h2>';
+    var h = '<section class="panel"><h2>對局設定</h2><div class="sets">' +
+      setRow("n", "對局人數", seg("segN", [[3, "三人局（含決勝局）"], [2, "雙人對局"]], S.setup.n)) +
+      setRow("t", "思考時間", seg("segT", [[90, "每手 90 秒"], [0, "不限時"]], S.setup.timer)) +
+      (S.setup.n === 3 ? setRow("b", "破牆後蓋牆", seg("segB", [[0, "需要蓋牆"], [1, "不蓋牆"]], S.setup.brkNoWall ? 1 : 0)) : "") +
+      setRow("u", "落子確認", seg("segU", [[1, "二次點擊確認"], [0, "單次點擊"]], S.setup.undo ? 1 : 0)) +
+      setRow("a", "回合動畫", seg("segA", [[1, "開啟"], [0, "關閉"]], S.animOn ? 1 : 0)) + "</div></section>";
+    h += '<div class="modes"><section class="panel"><h2>本機對局</h2><p>所有玩家共用本裝置，輪流操作。</p><div class="btns">' +
+      '<button class="primary" type="button" id="goLocal">開始對局</button>' +
+      (S.saved && S.saved.game ? '<button type="button" id="goResume">繼續上次對局</button>' : "") + "</div></section>";
+    h += '<section class="panel"><h2>線上對局</h2>';
     if (S.net === "loading") h += "<p>正在檢查連線功能……</p>";
-    else if (S.net === "none") h += "<p>" + esc(window.WG_NET_NOTE || "這個畫面目前用不了連線對戰。請登入 Claude 後，從頁面擁有者分享的連結開啟。同機輪流不受影響。") + "</p>";
+    else if (S.net === "none") h += "<p>" + esc(window.WG_NET_NOTE || "目前無法使用線上對局。請登入 Claude 後，由頁面擁有者分享的連結開啟。本機對局不受影響。") + "</p>";
     else {
-      h += "<p>每個人用自己的裝置打開這一頁。開房的人把房號告訴對手。</p>" +
-        (S.user && S.user.setName ? '<div class="row"><label class="fld" for="nickIn">暱稱（對手看得到）<input type="text" class="plain" id="nickIn" maxlength="12" autocomplete="off" value="' + esc(S.nick) + '"></label></div>' : "") +
-        (S.canWrite === false ? '<div class="warnbox">你目前是檢視權限，可以進房間觀戰，不能入座下棋。</div>' : "") +
-        '<div class="row"><button class="primary" type="button" id="goCreate"' + (S.busy || S.canWrite === false ? " disabled" : "") + ">建立房間</button></div>" +
-        '<div class="row"><label class="fld" for="codeIn">房號<input type="text" id="codeIn" maxlength="4" autocomplete="off" autocapitalize="characters" inputmode="text"></label>' +
-        '<button type="button" id="goJoin" style="align-self:flex-end">加入房間</button></div>';
+      h += "<p>每位玩家以各自的裝置開啟本頁；由房主建立房間後，將房間代碼或邀請連結提供給其他玩家。</p>" +
+        (S.canWrite === false ? '<div class="warnbox">您目前為檢視權限，可進入房間觀戰，無法入座對局。</div>' : "") +
+        (S.user && S.user.setName ? '<label class="fld" for="nickIn">玩家名稱（其他玩家可見）<input type="text" class="plain" id="nickIn" maxlength="12" autocomplete="off" value="' + esc(S.nick) + '"></label>' : "") +
+        '<div class="btns"><button class="primary" type="button" id="goCreate"' + (S.busy || S.canWrite === false ? " disabled" : "") + ">建立房間</button></div>" +
+        '<div class="join"><label class="fld" for="codeIn">房間代碼<input type="text" id="codeIn" maxlength="4" autocomplete="off" autocapitalize="characters" inputmode="text"></label>' +
+        '<button type="button" id="goJoin">加入房間</button></div>';
     }
-    return h + "</section>";
+    return h + "</section></div>";
   }
   function roomHtml() {
     if (S.missing) return '<section class="panel"><h2>找不到房間 ' + esc(S.code) + '</h2><p>請確認房號，或請對方重新建立。</p><div class="row"><button type="button" id="goHome">回首頁</button></div></section>';
     if (!S.room) return '<section class="panel"><h2>正在進入房間 ' + esc(S.code) + "</h2><p>" + (S.slow ? "還連不上資料，請確認網路後稍候。" : "讀取中……") + "</p></section>";
     var room = S.room, full = room.seats.every(function (x) { return !!x; }), h = "";
-    h += '<section class="panel"><p>房號</p><div class="code">' + esc(room.code) + "</div>" +
+    h += '<section class="panel"><p>房間代碼</p><div class="code">' + esc(room.code) + "</div>" +
       (window.WG_STANDALONE ? '<div class="row"><button class="small" type="button" id="goCopy">複製邀請連結</button></div>' : "") +
-      "<p>把房號" + (window.WG_STANDALONE ? "或邀請連結" : "") + "告訴對手，請他們打開這一頁，輸入房號後入座。" +
-      (room.n === 3 ? "三人局接一對一" : "只下一對一") + "，" + (room.opts && room.opts.timer ? "每步 " + room.opts.timer + " 秒" : "不限時") + (room.n === 3 ? "，破牆那一手" + (room.opts && room.opts.brkNoWall ? "不蓋牆" : "照常蓋牆") : "") + "，" + (room.opts && room.opts.undo ? "點兩下才確定（回合內可悔棋）" : "點一下就確定") + "。</p></section>";
+      "<p>請將房間代碼" + (window.WG_STANDALONE ? "或邀請連結" : "") + "提供給其他玩家；對方開啟本頁、輸入代碼後即可入座。" +
+      "本房設定：" + (room.n === 3 ? "三人局（含決勝局）" : "雙人對局") + "、" + (room.opts && room.opts.timer ? "每手 " + room.opts.timer + " 秒" : "不限時") + (room.n === 3 ? "、破牆後" + (room.opts && room.opts.brkNoWall ? "不蓋牆" : "需要蓋牆") : "") + "、" + (room.opts && room.opts.undo ? "二次點擊確認" : "單次點擊") + "。</p></section>";
     h += '<section class="panel"><h2>座位</h2>' +
       (S.user && S.user.setName && !seated() ? '<div class="row"><label class="fld" for="nickIn">暱稱（對手看得到）<input type="text" class="plain" id="nickIn" maxlength="12" autocomplete="off" value="' + esc(S.nick) + '"></label></div>' : "") +
       '<div class="seats">';
@@ -456,11 +479,11 @@
       var mine = id && id === S.myId;
       h += '<div class="seat" style="--pc:var(--p' + i + ')"><span class="nm">' + (id ? esc(label(i)) : NAMES[i] + "　空位") + "</span>" +
         (!id ? '<button class="small" type="button" data-sit="' + i + '"' + (S.busy || S.canWrite === false ? " disabled" : "") + ">入座</button>"
-          : mine ? '<button class="small ghost" type="button" data-unsit="' + i + '"' + (S.busy ? " disabled" : "") + ">離座</button>" : "") + "</div>";
+          : mine ? '<button class="small ghost" type="button" data-unsit="' + i + '"' + (S.busy ? " disabled" : "") + ">離席</button>" : "") + "</div>";
     });
     h += "</div>";
     h += '<div class="row"><button class="primary" type="button" id="goStart"' + (full && seated() && !S.busy ? "" : " disabled") + ">開始對局</button>" +
-      '<span class="note">' + (full ? (seated() ? "人到齊了。" : "你沒有入座，只能觀戰。") : "等所有座位坐滿。同一台裝置可以坐多個位子，方便自己測試。") + "</span></div></section>";
+      '<span class="note">' + (full ? (seated() ? "玩家已到齊。" : "您尚未入座，僅能觀戰。") : "待所有座位入座後即可開始。同一裝置可入座多個座位，供自行測試。") + "</span></div></section>";
     return h;
   }
 
@@ -481,7 +504,7 @@
     return label(cur) + "：選一枚棋子";
   }
   function resultHtml(m) {
-    var v = WG.verdict(m), g = m.game, h = '<section class="panel" id="result"><h2>' + (m.stage === "r1" ? "三人局結果" : "一對一結果") + "</h2>";
+    var v = WG.verdict(m), g = m.game, h = '<section class="panel" id="result"><h2>' + (m.stage === "r1" ? "三人局結果" : (m.n === 3 ? "決勝局結果" : "對局結果")) + "</h2>";
     h += '<table class="rank"><thead><tr><th>名次</th><th>玩家</th><th>領地</th><th>最大區塊</th></tr></thead><tbody>';
     v.rank.forEach(function (x, i) {
       h += "<tr><td>" + (i + 1) + '</td><td><span class="sw" style="--pc:var(--p' + x.p + ')"></span>' + esc(label(x.p)) + '</td><td class="num">' + x.total + "</td><td>" + x.best + "</td></tr>";
@@ -489,12 +512,38 @@
     h += "</tbody></table>";
     if (g.stalemate) h += "<p>沒有人能再移動。混在同一區塊的棋子，各算腳下 1 格。</p>";
     var can = seated() && !S.busy;
-    if (v.kind === "tie") h += "<p>前兩名完全同分，交換順序重賽。</p>" + '<div class="row"><button class="primary" type="button" id="goNext"' + (can ? "" : " disabled") + ">重賽</button></div>";
-    else if (v.kind === "toDuel") h += "<p>" + esc(label(v.safe)) + " 存活。" + esc(label(v.duel[0])) + " 與 " + esc(label(v.duel[1])) + " 另開一局一對一：" + esc(label(v.duel[0])) + " 改拿紅棋先手，" + esc(label(v.duel[1])) + " 改拿藍棋。</p>" +
-      '<div class="row"><button class="primary" type="button" id="goNext"' + (can ? "" : " disabled") + ">開始一對一</button></div>";
-    else h += "<p>" + esc(label(v.winner)) + " 存活，" + esc(label(v.out)) + " 淘汰。" + (m.safe !== null && m.safe !== undefined ? esc(seatLabel(m.safe)) + " 已在三人局存活。" : "") + "</p>" +
-      '<div class="row"><button class="primary" type="button" id="goAgain"' + (can ? "" : " disabled") + ">再來一局</button></div>";
+    if (v.kind === "tie") h += "<p>前兩名完全同分，將交換順序重新對局。</p>" + '<div class="row"><button class="primary" type="button" id="goNext"' + (can ? "" : " disabled") + ">重新對局</button></div>";
+    else if (v.kind === "toDuel") h += "<p>" + esc(label(v.safe)) + " 晉級。" + esc(label(v.duel[0])) + " 與 " + esc(label(v.duel[1])) + " 進入決勝局：" + esc(label(v.duel[0])) + " 改執紅棋先手，" + esc(label(v.duel[1])) + " 改執藍棋。</p>" +
+      '<div class="row"><button class="primary" type="button" id="goNext"' + (can ? "" : " disabled") + ">進入決勝局</button></div>";
+    else h += "<p>" + esc(label(v.winner)) + " 獲勝，" + esc(label(v.out)) + " 淘汰。" + (m.safe !== null && m.safe !== undefined ? esc(seatLabel(m.safe)) + " 已於三人局晉級。" : "") + "</p>" +
+      '<div class="row"><button class="primary" type="button" id="goAgain"' + (can ? "" : " disabled") + ">再開一局</button></div>";
     return h + "</section>";
+  }
+  // Small pictograms for the in-game rules card. 48 x 48, drawn from the same tokens as the board.
+  function ico(inner) { return '<svg class="ico" viewBox="0 0 48 48" aria-hidden="true">' + inner + "</svg>"; }
+  var ARW = '<marker id="ar" markerWidth="6" markerHeight="6" refX="4.5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" class="i-arf"/></marker>';
+  var ICON = {
+    sq: ico("<defs>" + ARW + '</defs><rect class="i-pc" x="3" y="17" width="14" height="14" rx="3"/><line class="i-ar" x1="20" y1="24" x2="43" y2="24" marker-end="url(#ar)"/><circle class="i-dot" cx="28" cy="24" r="3"/><circle class="i-dot" cx="38" cy="24" r="3"/>'),
+    rd: ico("<defs>" + ARW + '</defs><circle class="i-pc" cx="10" cy="36" r="7"/><path class="i-ar" d="M19 36 H34 V10" marker-end="url(#ar)"/><circle class="i-dot" cx="34" cy="36" r="3"/><circle class="i-dot" cx="34" cy="18" r="3"/>'),
+    wall: ico('<rect class="i-cell" x="9" y="9" width="30" height="30" rx="4"/><rect class="i-pc" x="17" y="17" width="14" height="14" rx="3"/><line class="i-wall" x1="39" y1="10" x2="39" y2="38"/><line class="i-slot" x1="12" y1="9" x2="36" y2="9"/><line class="i-slot" x1="12" y1="39" x2="36" y2="39"/><line class="i-slot" x1="9" y1="12" x2="9" y2="36"/>'),
+    brk: ico("<defs>" + ARW + '</defs><line class="i-wall" x1="26" y1="4" x2="26" y2="15"/><line class="i-wall" x1="26" y1="33" x2="26" y2="44"/><rect class="i-shard" x="30" y="16" width="5" height="4" transform="rotate(25 32 18)"/><rect class="i-shard" x="33" y="26" width="5" height="4" transform="rotate(-30 35 28)"/><rect class="i-shard" x="29" y="22" width="4" height="4" transform="rotate(50 31 24)"/><rect class="i-pc" x="3" y="17" width="14" height="14" rx="3"/><line class="i-ar" x1="19" y1="24" x2="43" y2="24" marker-end="url(#ar)"/>'),
+    area: ico('<defs><pattern id="ih" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect class="dead-bg" width="5" height="5"/><line class="dead-ln" x1="0" y1="0" x2="0" y2="5"/></pattern></defs><rect class="i-own" x="4" y="12" width="18" height="24" rx="3"/><circle class="i-pc" cx="13" cy="24" r="5"/><rect x="26" y="12" width="18" height="24" rx="3" fill="url(#ih)"/><line class="i-wall" x1="24" y1="9" x2="24" y2="39"/>'),
+    win: ico('<rect class="i-own" x="6" y="10" width="14" height="30" rx="3"/><rect class="i-own2" x="28" y="24" width="14" height="16" rx="3"/><path class="i-crown" d="M7 7 l3 -4 l3 3 l3 -3 l3 4 z"/>')
+  };
+  function rulesCard(g, m) {
+    var items = [
+      [ICON.sq, "方形棋", "沿單一方向直行 1 或 2 格。"],
+      [ICON.rd, "圓形棋", "移動 1 格；或移動 1 格後轉向，再移動 1 格。"],
+      [ICON.wall, "蓋牆", "每手移動後，須於棋子所在格的四邊擇一蓋牆。"]
+    ];
+    if (g.round === 1) items.push([ICON.brk, "破牆（每人一次）", "可拆除擋在移動路徑上的一道牆" + (g.opts && g.opts.brkNoWall ? "；該手不另蓋牆。" : "，之後仍須蓋牆。")]);
+    items.push([ICON.area, "領地與死區", "僅有己方棋子的封閉區域為領地；沒有棋子的封閉區域為死區（斜線），不計分。"]);
+    items.push([ICON.win, "勝負", g.round === 1 ? "所有棋子被隔開即結束；領地最大者晉級，其餘兩位進入決勝局。" : "所有棋子被隔開即結束；領地格數多者獲勝。"]);
+    var wide = window.matchMedia && matchMedia("(orientation: landscape) and (min-width: 700px)").matches;
+    var open = S.rulesOpen === undefined ? wide : S.rulesOpen;
+    return '<details class="rcard" id="rcard"' + (open ? " open" : "") + "><summary>規則速覽</summary><ul>" + items.map(function (it) {
+      return "<li>" + it[0] + "<div><b>" + it[1] + "</b><span>" + it[2] + "</span></div></li>";
+    }).join("") + "</ul></details>";
   }
   function gameHtml() {
     var m = S.match, g = m.game, cur = WG.current(g), act = canAct(cur), sc = WG.scores(g), h = "";
@@ -504,13 +553,13 @@
       var fresh = !S.stamp || S.stamp.split("|")[0] !== String(S.code || ""); // first sight of this game: nothing to replay
       var mode = S.nextAnim || "full"; S.nextAnim = null;
       S.stamp = stamp; S.ui = {};
-      setAnim(fresh || mode === "none" || S.kind !== "online" ? null : lastAnim(g.last));
+      void mode; setAnim(fresh || S.kind !== "online" ? null : lastAnim(g.last)); // room play: everyone, the mover included, sees the finished turn
     }
     var ids = g.round === 1 ? [0, 1, 2] : [0, 1];
     h += '<div class="game"><div class="g-top"><div class="scores">';
     ids.forEach(function (p) {
       var inGame = g.order.indexOf(p) >= 0, sub;
-      if (!inGame) sub = "已存活";
+      if (!inGame) sub = "已晉級";
       else if (g.round === 1) sub = "破牆 " + (g.brk[p] ? "可用" : "已用");
       else sub = g.order[0] === p ? "先手" : "後手";
       if (inGame && S.kind === "online" && awayIds().indexOf(seatOf(p)) >= 0) sub = "已離線";
@@ -529,21 +578,23 @@
       "可以等對方回來接著下，或是離開房間。" + (m.opts && m.opts.timer ? "對方的時間照常倒數。" : "") +
       '<div class="row" style="margin-top:8px"><button type="button" id="goWait">繼續等待</button><button type="button" id="goQuit">離開房間</button></div></div>';
     if (g.phase !== "over") {
-      h += '<div class="controls">';
+      var ui = S.ui, stage = g.round === 1 ? "三人局" : (m.n === 3 ? "決勝局" : "雙人對局");
+      h += '<section class="acts"><div class="acts-head"><span>' + stage + (g.round === 2 && m.safe !== null && m.safe !== undefined ? "｜" + esc(seatLabel(m.safe)) + " 已晉級" : "") + "</span></div>";
       if (g.phase === "place" && act && WG.placeTypes(g).length > 1)
-        h += '<span class="note">要擺的棋子</span>' + seg("segP", [["s", "方形"], ["r", "圓形"]], S.ui.ptype || "s");
-      var ui = S.ui, undoOn = !!(m.opts && m.opts.undo);
-      if (act && (ui.pplace || ui.pend || ui.brkOpts)) h += '<button type="button" id="goUndo">復原上一動</button>';
-      h += '<span class="grow"></span>' + (S.kind === "online" ? '<button class="small ghost" type="button" id="goAnim">動畫：' + (S.animOn ? "開" : "關") + "</button>" : "") + '<button class="small hidden" type="button" id="goForce">對方逾時，代下隨機一手</button></div>';
-      h += '<p class="note">' + (g.round === 1 ? "三人局" + (g.opts && g.opts.brkNoWall ? "（破牆那一手不蓋牆）" : "") : "一對一") + (g.round === 2 && m.safe !== null && m.safe !== undefined ? "（" + esc(seatLabel(m.safe)) + " 已存活）" : "") + "　方形直走 1 或 2 格；圓形走 1 格，或走 1 格後轉彎再 1 格。</p>";
+        h += '<div class="acts-row"><span class="note">落子棋種</span>' + seg("segP", [["s", "方形棋"], ["r", "圓形棋"]], S.ui.ptype || "s") + "</div>";
+      h += '<div class="acts-grid">' +
+        '<button type="button" id="goUndo"' + (act && (ui.pplace || ui.pend || ui.brkOpts) ? "" : " disabled") + ">復原上一步</button>" +
+        (S.kind === "online" ? '<button type="button" id="goAnim" aria-pressed="' + S.animOn + '">回合動畫：' + (S.animOn ? "開啟" : "關閉") + "</button>" : "") +
+        '<button class="hidden wide" type="button" id="goForce">對手逾時：代為隨機落子</button></div></section>';
+      h += rulesCard(g, m);
     } else h += resultHtml(m);
     return h + "</div></div>";
   }
 
   function render() {
     var tag = $("tag");
-    if (S.kind === "online" && S.code) { tag.innerHTML = "房號 <b>" + esc(S.code) + "</b>"; tag.classList.remove("hidden"); }
-    else if (S.kind === "local") { tag.textContent = "同機輪流"; tag.classList.remove("hidden"); }
+    if (S.kind === "online" && S.code) { tag.innerHTML = "房間 <b>" + esc(S.code) + "</b>"; tag.classList.remove("hidden"); }
+    else if (S.kind === "local") { tag.textContent = "本機對局"; tag.classList.remove("hidden"); }
     else tag.classList.add("hidden");
     $("btnLeave").classList.toggle("hidden", S.view === "home");
     var ae = document.activeElement, keepId = ae && (ae.id === "codeIn" || ae.id === "nickIn") ? ae.id : null;
@@ -657,6 +708,7 @@
       }
       return;
     }
+    if ((el = t.closest("[data-help]"))) { var hk = el.getAttribute("data-help"); S.help = S.help === hk ? null : hk; render(); return; }
     if ((el = t.closest(".seg"))) {
       var b = t.closest("button"); if (!b) return;
       var v = b.getAttribute("data-v");
@@ -711,6 +763,7 @@
     S.ui = {}; autoPlay();
   }
 
+  view.addEventListener("toggle", function (e) { if (e.target && e.target.id === "rcard") S.rulesOpen = e.target.open; }, true);
   view.addEventListener("input", function (e) { if (e.target && e.target.id === "nickIn") S.nick = e.target.value; });
   $("btnRules").addEventListener("click", function () { $("rules").classList.toggle("hidden"); });
   $("btnRulesClose").addEventListener("click", function () { $("rules").classList.add("hidden"); });
